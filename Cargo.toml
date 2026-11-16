@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/valb-mig/corvo"
+
+[workspace.dependencies]
+corvo-domain = { path = "crates/domain" }
+corvo-fs = { path = "crates/fs" }
+corvo-ui = { path = "crates/ui" }
+gpui-kit = { version = "0.10", default-features = false }
+ignore = "0.4"
+anyhow = "1"
