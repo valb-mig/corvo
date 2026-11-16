@@ -7,11 +7,13 @@ pub use gpui_kit::component::input::InputEvent as Event;
 pub type State = EditorState;
 
 pub fn state(lang: Lang, text: String, window: &mut Window, cx: &mut Context<State>) -> State {
-    EditorState::new(window, cx)
+    let mut state = EditorState::new(window, cx)
         .language(name(lang))
         .line_number(true)
         .folding(true)
-        .default_value(text)
+        .default_value(text);
+    state.set_soft_wrap(false, window, cx);
+    state
 }
 
 pub fn view(state: &Entity<State>) -> impl IntoElement + use<> {
