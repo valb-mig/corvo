@@ -1,0 +1,8 @@
+[package]
+name = "corvo-fs"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+corvo-domain.workspace = true
+ignore.workspace = true
