@@ -1,0 +1,22 @@
+[package]
+name = "corvo-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+corvo-domain.workspace = true
+gpui-kit = { workspace = true, features = [
+    "component",
+    "assets",
+    "tree-sitter-bash",
+    "tree-sitter-css",
+    "tree-sitter-html",
+    "tree-sitter-javascript",
+    "tree-sitter-markdown",
+    "tree-sitter-python",
+    "tree-sitter-rust",
+    "tree-sitter-toml",
+    "tree-sitter-tsx",
+    "tree-sitter-typescript",
+    "tree-sitter-yaml",
+] }

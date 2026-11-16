@@ -1,0 +1,39 @@
+use std::rc::Rc;
+
+use corvo_domain::keymap::{Binding, Command, Keymap, Scope};
+use gpui_kit::component::input::{Redo, Undo};
+use gpui_kit::{Action, App, KeyBinding, KeyBindingContextPredicate, actions};
+
+actions!(corvo, [Save]);
+
+pub fn bind(keymap: &Keymap, cx: &mut App) {
+    let bindings: Vec<_> = keymap
+        .bindings()
+        .iter()
+        .filter_map(|b| binding(b, cx))
+        .collect();
+    cx.bind_keys(bindings);
+}
+
+fn binding(b: &Binding, cx: &App) -> Option<KeyBinding> {
+    let context = context(b.scope())
+        .and_then(|ctx| KeyBindingContextPredicate::parse(ctx).ok())
+        .map(Rc::new);
+    KeyBinding::load(b.chord(), action(b.command()), context, false, None, cx).ok()
+}
+
+fn action(command: Command) -> Box<dyn Action> {
+    match command {
+        Command::Save => Box::new(Save),
+        Command::Undo => Box::new(Undo),
+        Command::Redo => Box::new(Redo),
+    }
+}
+
+fn context(scope: Scope) -> Option<&'static str> {
+    match scope {
+        Scope::Global => None,
+        Scope::Editor => Some("Input && mode == editor"),
+        Scope::Tree => Some(gpui_kit::base::tree_key_context()),
+    }
+}
