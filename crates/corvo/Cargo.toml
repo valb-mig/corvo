@@ -1,0 +1,11 @@
+[package]
+name = "corvo"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+corvo-domain.workspace = true
+corvo-fs.workspace = true
+corvo-ui.workspace = true
+gpui-kit.workspace = true
+anyhow.workspace = true
