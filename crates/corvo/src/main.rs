@@ -12,6 +12,7 @@ use gpui_kit::{AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOpt
 use shell::Shell;
 
 fn main() -> anyhow::Result<()> {
+    display()?;
     let bench = Workbench::new(root()?, Box::new(LocalFs))?;
 
     gpui_kit::application()
@@ -41,6 +42,16 @@ fn main() -> anyhow::Result<()> {
             .expect("failed to open window");
         });
 
+    Ok(())
+}
+
+fn display() -> anyhow::Result<()> {
+    let found = ["WAYLAND_DISPLAY", "DISPLAY"]
+        .iter()
+        .any(|var| std::env::var_os(var).is_some_and(|value| !value.is_empty()));
+    if cfg!(target_os = "linux") && !found {
+        anyhow::bail!("no display: set WAYLAND_DISPLAY or DISPLAY");
+    }
     Ok(())
 }
 
