@@ -6,6 +6,9 @@ edition.workspace = true
 [dependencies]
 corvo-domain.workspace = true
 corvo-fs.workspace = true
+corvo-lsp.workspace = true
 corvo-ui.workspace = true
 gpui-kit.workspace = true
 anyhow.workspace = true
+futures.workspace = true
+lsp-types.workspace = true

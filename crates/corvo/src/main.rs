@@ -1,3 +1,4 @@
+mod assist;
 mod pane;
 mod shell;
 
