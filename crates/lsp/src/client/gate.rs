@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -38,6 +38,7 @@ pub struct Shared {
     pending: Mutex<HashMap<RequestId, Waiter>>,
     caps: Mutex<Option<ServerCapabilities>>,
     next: AtomicI32,
+    stopping: AtomicBool,
 }
 
 impl Shared {
@@ -48,6 +49,7 @@ impl Shared {
             pending: Mutex::default(),
             caps: Mutex::default(),
             next: AtomicI32::new(1),
+            stopping: AtomicBool::new(false),
         }
     }
 
@@ -62,6 +64,14 @@ impl Shared {
         } else {
             gate.queue.push(msg);
         }
+    }
+
+    pub fn stop(&self) {
+        self.stopping.store(true, Ordering::Relaxed);
+    }
+
+    pub fn stopping(&self) -> bool {
+        self.stopping.load(Ordering::Relaxed)
     }
 
     pub fn id(&self) -> RequestId {

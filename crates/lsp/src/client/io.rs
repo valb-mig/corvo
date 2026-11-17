@@ -40,6 +40,9 @@ impl Reader {
             }
         }
         self.shared.close();
+        if self.shared.stopping() {
+            return;
+        }
         let _ = self.notes.unbounded_send(Note::Exited {
             server: self.server,
             root: self.root,

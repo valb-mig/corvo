@@ -127,3 +127,27 @@ fn reports_failed_initialize() {
 
     assert!(matches!(next(&mut notes), Note::Failed { message, .. } if message == "no tsserver"));
 }
+
+#[test]
+fn reaping_an_idle_server_is_quiet() {
+    let (mut hub, mut notes) = hub();
+    hub.open(&file(), Lang::Rust, "fn main() {}");
+    next(&mut notes);
+
+    hub.close(&file());
+    hub.reap();
+
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(notes.try_recv().is_err());
+}
+
+#[test]
+fn reap_keeps_servers_with_open_documents() {
+    let (mut hub, mut notes) = hub();
+    hub.open(&file(), Lang::Rust, "fn main() {}");
+    next(&mut notes);
+
+    hub.reap();
+
+    assert_eq!(hub.triggers(&file()), ["."]);
+}

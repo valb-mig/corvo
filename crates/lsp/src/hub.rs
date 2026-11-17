@@ -178,6 +178,11 @@ impl Hub {
             .unwrap_or_default()
     }
 
+    pub fn reap(&mut self) {
+        let used: HashSet<Key> = self.docs.values().map(|track| track.key.clone()).collect();
+        self.clients.retain(|key, _| used.contains(key));
+    }
+
     pub fn exited(&mut self, server: &str, root: &Path) {
         let key = (server.to_owned(), root.to_path_buf());
         self.clients.remove(&key);

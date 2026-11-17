@@ -26,6 +26,10 @@ pub trait Profile {
     fn settings(&self) -> Option<Value> {
         None
     }
+
+    fn memory(&self) -> u64 {
+        3072
+    }
 }
 
 pub fn of(server: &str) -> Box<dyn Profile> {

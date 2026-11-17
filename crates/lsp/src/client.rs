@@ -1,10 +1,11 @@
 mod caps;
 mod gate;
 mod io;
+mod limit;
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::AtomicI32;
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -34,7 +35,7 @@ pub struct Client {
 impl Client {
     pub fn spawn(spec: &Spec, root: &Path, notes: UnboundedSender<Note>) -> std::io::Result<Self> {
         let profile = profile::of(spec.name());
-        let mut cmd = Command::new(spec.command());
+        let mut cmd = limit::command(spec.command(), profile.memory())?;
         cmd.args(spec.arguments())
             .args(profile.args(root))
             .envs(profile.env())
@@ -153,6 +154,7 @@ impl Client {
 
 impl Drop for Client {
     fn drop(&mut self) {
+        self.shared.stop();
         let id = self.shared.id();
         self.shared.raw(Message::Request(Request::new(
             id,
