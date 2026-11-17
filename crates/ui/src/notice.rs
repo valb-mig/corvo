@@ -5,3 +5,7 @@ use gpui_kit::{App, SharedString, Window};
 pub fn error(message: impl Into<SharedString>, window: &mut Window, cx: &mut App) {
     window.push_notification(Notification::error(message), cx);
 }
+
+pub fn warn(message: impl Into<SharedString>, window: &mut Window, cx: &mut App) {
+    window.push_notification(Notification::warning(message), cx);
+}

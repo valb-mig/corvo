@@ -11,8 +11,11 @@ gpui-kit = { workspace = true, features = [
     "tree-sitter-bash",
     "tree-sitter-css",
     "tree-sitter-html",
+    "tree-sitter-java",
     "tree-sitter-javascript",
+    "tree-sitter-kotlin",
     "tree-sitter-markdown",
+    "tree-sitter-php",
     "tree-sitter-python",
     "tree-sitter-rust",
     "tree-sitter-toml",
@@ -20,3 +23,5 @@ gpui-kit = { workspace = true, features = [
     "tree-sitter-typescript",
     "tree-sitter-yaml",
 ] }
+anyhow.workspace = true
+lsp-types.workspace = true

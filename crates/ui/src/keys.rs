@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use corvo_domain::keymap::{Binding, Command, Keymap, Scope};
-use gpui_kit::component::input::{Redo, Undo};
+use gpui_kit::component::input::{GoToDefinition, Redo, ShowCompletions, Undo};
 use gpui_kit::{Action, App, KeyBinding, KeyBindingContextPredicate, actions};
 
 actions!(corvo, [Save]);
@@ -27,6 +27,8 @@ fn action(command: Command) -> Box<dyn Action> {
         Command::Save => Box::new(Save),
         Command::Undo => Box::new(Undo),
         Command::Redo => Box::new(Redo),
+        Command::Complete => Box::new(ShowCompletions),
+        Command::Definition => Box::new(GoToDefinition),
     }
 }
 
