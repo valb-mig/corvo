@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
 
 use corvo_domain::{Doc, Lang, Workbench};
 use corvo_lsp::Hub;
@@ -12,6 +13,8 @@ use gpui_kit::{
 use lsp_types::{Diagnostic, Position};
 
 use crate::assist::Assist;
+
+const IDLE: Duration = Duration::from_secs(60);
 
 pub struct Code {
     bench: Entity<Workbench>,
@@ -148,11 +151,21 @@ impl Code {
         };
         self.bench.update(cx, |bench, _| bench.close(&path));
         self.hub.update(cx, |hub, _| hub.close(&path));
+        self.reap(cx);
         self.editors.remove(&path);
         self.texts.remove(&path);
         self.subs.remove(&path);
         self.focus(window, cx);
         cx.notify();
+    }
+
+    fn reap(&self, cx: &mut Context<Self>) {
+        let hub = self.hub.clone();
+        cx.spawn(async move |_, cx| {
+            cx.background_executor().timer(IDLE).await;
+            hub.update(cx, |hub, _| hub.reap());
+        })
+        .detach();
     }
 
     fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
