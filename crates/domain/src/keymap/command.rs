@@ -3,4 +3,6 @@ pub enum Command {
     Save,
     Undo,
     Redo,
+    Complete,
+    Definition,
 }

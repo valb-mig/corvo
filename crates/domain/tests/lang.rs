@@ -8,6 +8,9 @@ fn detects_by_extension() {
     assert_eq!(Lang::of(Path::new("Cargo.toml")), Lang::Toml);
     assert_eq!(Lang::of(Path::new("app.TSX")), Lang::Tsx);
     assert_eq!(Lang::of(Path::new("README.md")), Lang::Markdown);
+    assert_eq!(Lang::of(Path::new("index.php")), Lang::Php);
+    assert_eq!(Lang::of(Path::new("Main.java")), Lang::Java);
+    assert_eq!(Lang::of(Path::new("build.gradle.kts")), Lang::Kotlin);
 }
 
 #[test]

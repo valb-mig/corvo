@@ -7,6 +7,7 @@ mod workbench;
 
 pub mod keymap;
 pub mod port;
+pub mod server;
 
 pub use doc::Doc;
 pub use lang::Lang;

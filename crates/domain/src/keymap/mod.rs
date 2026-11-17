@@ -33,6 +33,8 @@ impl Default for Keymap {
             Binding::new("ctrl-s", Command::Save, Scope::Global),
             Binding::new("ctrl-z", Command::Undo, Scope::Editor),
             Binding::new("ctrl-y", Command::Redo, Scope::Editor),
+            Binding::new("ctrl-space", Command::Complete, Scope::Editor),
+            Binding::new("f12", Command::Definition, Scope::Editor),
         ])
     }
 }
