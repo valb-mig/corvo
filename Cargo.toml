@@ -11,9 +11,16 @@ repository = "https://github.com/valb-mig/corvo"
 corvo-domain = { path = "crates/domain" }
 corvo-fs = { path = "crates/fs" }
 corvo-ui = { path = "crates/ui" }
+corvo-lsp = { path = "crates/lsp" }
 gpui-kit = { version = "0.10", default-features = false }
 ignore = "0.4"
 anyhow = "1"
+futures = "0.3"
+libc = "0.2"
+lsp-server = "0.10"
+lsp-types = "0.97"
+serde_json = "1"
+url = "2"
 
 [profile.dev.package."*"]
 opt-level = 3
