@@ -5,10 +5,20 @@ A small, fast code editor written in Rust on top of [GPUI Kit](https://github.co
 ## Run
 
 ```sh
-cargo run -- path/to/project
+cargo run
 ```
 
-Without a path it opens the current directory.
+## Workspaces
+
+corvo opens on the list of workspaces, where you add, remove or enter one. A workspace links any number of project folders, none required.
+
+Inside a workspace the window has the center content (today the code editor) and, on the right, the file tree of the selected project. The **Projects** dropdown above the tree lists the linked projects: pick one to show its tree, link a folder, or unlink with ×. Open tabs belong to the workspace, so switching projects only changes the tree; when the active tab belongs to another linked project, the tree switches to it.
+
+corvo draws its own title bar: a back button to the workspace list, the workspace name, and the window controls the compositor supports (Hyprland has no minimize, so it only shows maximize and close). Leaving a workspace or closing the window is refused while a tab has unsaved changes.
+
+Any file opens in a tab: text goes to the editor, images (png, jpg, webp, gif, svg, bmp, tiff, ico) render in a viewer, and other binary files show their size and a notice.
+
+Workspaces are saved to `$XDG_CONFIG_HOME/corvo/workspaces.json` (`~/.config/corvo/workspaces.json` by default).
 
 ## Keys
 
@@ -24,7 +34,7 @@ Without a path it opens the current directory.
 
 ## Language servers
 
-Completion, diagnostics, hover and go to definition come from language servers. Each one starts the first time a file of its language opens, rooted at the nearest project marker. Servers that are not installed only show a notice.
+Completion, diagnostics, hover and go to definition come from language servers. Each one starts the first time a file of its language opens, rooted at the nearest project marker inside the linked project that holds the file. Servers that are not installed only show a notice.
 
 | Language       | Server                       | Install                                   |
 | -------------- | ---------------------------- | ----------------------------------------- |
