@@ -16,7 +16,9 @@ fn start(registry: Registry) -> (Hub, UnboundedReceiver<Note>) {
             std::env::temp_dir().join("corvo-test-cache"),
         );
     });
-    Hub::new(registry, std::env::temp_dir())
+    let (mut hub, notes) = Hub::new(registry);
+    hub.scope(vec![std::env::temp_dir()], None);
+    (hub, notes)
 }
 
 fn hub() -> (Hub, UnboundedReceiver<Note>) {

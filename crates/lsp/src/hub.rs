@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use corvo_domain::Lang;
-use corvo_domain::server::{Registry, root};
+use corvo_domain::server::{Registry, bound, root};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
@@ -31,7 +31,8 @@ struct Track {
 
 pub struct Hub {
     registry: Registry,
-    workspace: PathBuf,
+    projects: Vec<PathBuf>,
+    active: Option<PathBuf>,
     clients: HashMap<Key, Arc<Client>>,
     docs: HashMap<PathBuf, Track>,
     missing: HashSet<String>,
@@ -39,20 +40,23 @@ pub struct Hub {
 }
 
 impl Hub {
-    pub fn new(
-        registry: Registry,
-        workspace: impl Into<PathBuf>,
-    ) -> (Self, UnboundedReceiver<Note>) {
+    pub fn new(registry: Registry) -> (Self, UnboundedReceiver<Note>) {
         let (notes, rx) = unbounded();
         let hub = Self {
             registry,
-            workspace: workspace.into(),
+            projects: Vec::new(),
+            active: None,
             clients: HashMap::new(),
             docs: HashMap::new(),
             missing: HashSet::new(),
             notes,
         };
         (hub, rx)
+    }
+
+    pub fn scope(&mut self, projects: Vec<PathBuf>, active: Option<PathBuf>) {
+        self.projects = projects;
+        self.active = active;
     }
 
     pub fn open(&mut self, path: &Path, lang: Lang, text: &str) {
@@ -191,7 +195,8 @@ impl Hub {
 
     fn client(&mut self, path: &Path, lang: Lang) -> Option<(Key, Arc<Client>)> {
         let spec = self.registry.find(lang)?;
-        let root = root(path, spec.root_markers(), &self.workspace);
+        let bound = bound(path, &self.projects, self.active.as_deref());
+        let root = root(path, spec.root_markers(), &bound);
         let key = (spec.name().to_owned(), root);
         if let Some(client) = self.clients.get(&key) {
             return Some((key, client.clone()));

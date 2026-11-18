@@ -16,7 +16,8 @@ fn completes_and_diagnoses_with_tsc() {
     fs::write(&file, text).unwrap();
     fs::write(ws.join("package.json"), "{}").unwrap();
 
-    let (mut hub, mut notes) = Hub::new(Registry::default(), &ws);
+    let (mut hub, mut notes) = Hub::new(Registry::default());
+    hub.scope(vec![ws.clone()], None);
     hub.open(&file, Lang::TypeScript, text);
 
     let deadline = Instant::now() + Duration::from_secs(20);
