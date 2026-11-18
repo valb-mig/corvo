@@ -1,5 +1,15 @@
 use std::path::{Path, PathBuf};
 
+use crate::owner;
+
+pub fn bound(file: &Path, projects: &[PathBuf], active: Option<&Path>) -> PathBuf {
+    owner(file, projects)
+        .or(active)
+        .or_else(|| file.parent())
+        .unwrap_or(file)
+        .to_path_buf()
+}
+
 pub fn root(file: &Path, markers: &[String], workspace: &Path) -> PathBuf {
     file.ancestors()
         .skip(1)

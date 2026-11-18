@@ -5,6 +5,6 @@ use crate::Node;
 
 pub trait Fs {
     fn list(&self, dir: &Path) -> io::Result<Vec<Node>>;
-    fn read(&self, path: &Path) -> io::Result<String>;
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
     fn write(&self, path: &Path, text: &str) -> io::Result<()>;
 }

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use corvo_domain::Lang;
-use corvo_domain::server::{Registry, Spec, root};
+use corvo_domain::server::{Registry, Spec, bound, root};
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("corvo-root-{name}-{}", std::process::id()));
@@ -72,4 +72,21 @@ fn root_never_leaves_workspace() {
 
     assert_eq!(found, ws);
     fs::remove_dir_all(ws).unwrap();
+}
+
+#[test]
+fn bound_is_owning_project_then_active_then_parent() {
+    let projects = [PathBuf::from("/a"), PathBuf::from("/b")];
+
+    let owned = bound(Path::new("/b/src/lib.rs"), &projects, Some(Path::new("/a")));
+    let outside = bound(
+        Path::new("/usr/lib/core.rs"),
+        &projects,
+        Some(Path::new("/a")),
+    );
+    let loose = bound(Path::new("/usr/lib/core.rs"), &[], None);
+
+    assert_eq!(owned, Path::new("/b"));
+    assert_eq!(outside, Path::new("/a"));
+    assert_eq!(loose, Path::new("/usr/lib"));
 }
