@@ -6,3 +6,5 @@ edition.workspace = true
 [dependencies]
 corvo-domain.workspace = true
 ignore.workspace = true
+serde.workspace = true
+serde_json.workspace = true

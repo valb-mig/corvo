@@ -35,6 +35,6 @@ fn writes_and_reads_back() {
     let file = dir.join("a.txt");
 
     LocalFs.write(&file, "olá").unwrap();
-    assert_eq!(LocalFs.read(&file).unwrap(), "olá");
+    assert_eq!(LocalFs.read(&file).unwrap(), "olá".as_bytes());
     fs::remove_dir_all(dir).unwrap();
 }

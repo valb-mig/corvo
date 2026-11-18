@@ -1,9 +1,13 @@
+mod store;
+
 use std::io;
 use std::path::Path;
 
 use corvo_domain::Node;
 use corvo_domain::port::Fs;
 use ignore::WalkBuilder;
+
+pub use store::JsonStore;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LocalFs;
@@ -32,8 +36,8 @@ impl Fs for LocalFs {
         Ok(nodes)
     }
 
-    fn read(&self, path: &Path) -> io::Result<String> {
-        std::fs::read_to_string(path)
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        std::fs::read(path)
     }
 
     fn write(&self, path: &Path, text: &str) -> io::Result<()> {
