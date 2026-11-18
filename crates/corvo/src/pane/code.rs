@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use corvo_domain::{Doc, Lang, Workbench};
+use corvo_domain::{Content, Doc, Lang, Workbench};
 use corvo_lsp::Hub;
-use corvo_ui::{editor, notice, tab};
+use corvo_ui::{editor, notice, tab, viewer};
 use gpui_kit::{
-    AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    Subscription, Window, div,
+    AnyElement, AppContext as _, Context, Entity, EventEmitter, IntoElement, ParentElement as _,
+    Render, Styled as _, Subscription, Window, div,
 };
 use lsp_types::{Diagnostic, Position};
 
@@ -16,20 +16,32 @@ use crate::assist::Assist;
 
 const IDLE: Duration = Duration::from_secs(60);
 
+pub enum Event {
+    Active(PathBuf),
+}
+
+enum View {
+    Text(Entity<editor::State>),
+    Image,
+    Binary(u64),
+}
+
 pub struct Code {
     bench: Entity<Workbench>,
     hub: Entity<Hub>,
-    editors: HashMap<PathBuf, Entity<editor::State>>,
+    views: HashMap<PathBuf, View>,
     texts: HashMap<PathBuf, editor::Rope>,
     subs: HashMap<PathBuf, Vec<Subscription>>,
 }
+
+impl EventEmitter<Event> for Code {}
 
 impl Code {
     pub fn new(bench: Entity<Workbench>, hub: Entity<Hub>) -> Self {
         Self {
             bench,
             hub,
-            editors: HashMap::new(),
+            views: HashMap::new(),
             texts: HashMap::new(),
             subs: HashMap::new(),
         }
@@ -37,11 +49,12 @@ impl Code {
 
     pub fn open(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
         match self.bench.update(cx, |bench, _| bench.open(path)) {
-            Ok(Some(text)) => self.mount(path, text, window, cx),
+            Ok(Some(content)) => self.mount(path, content, window, cx),
             Ok(None) => {}
             Err(err) => notice::error(format!("{}: {err}", path.display()), window, cx),
         }
         self.focus(window, cx);
+        self.announce(cx);
         cx.notify();
     }
 
@@ -58,7 +71,7 @@ impl Code {
     }
 
     pub fn diagnose(&mut self, path: &Path, items: Vec<Diagnostic>, cx: &mut Context<Self>) {
-        if let Some(state) = self.editors.get(path) {
+        if let Some(View::Text(state)) = self.views.get(path) {
             state.update(cx, |state, cx| editor::diagnose(state, items, cx));
         }
     }
@@ -71,12 +84,33 @@ impl Code {
         cx: &mut Context<Self>,
     ) {
         self.open(path, window, cx);
-        if let (Some(at), Some(state)) = (at, self.editors.get(path)) {
+        if let (Some(at), Some(View::Text(state))) = (at, self.views.get(path)) {
             state.update(cx, |state, cx| state.set_cursor_position(at, window, cx));
         }
     }
 
-    fn mount(&mut self, path: &Path, text: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn mount(
+        &mut self,
+        path: &Path,
+        content: Content,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = match content {
+            Content::Text(text) => View::Text(self.edit(path, text, window, cx)),
+            Content::Image => View::Image,
+            Content::Binary { size } => View::Binary(size),
+        };
+        self.views.insert(path.to_path_buf(), view);
+    }
+
+    fn edit(
+        &mut self,
+        path: &Path,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<editor::State> {
         let lang = self
             .bench
             .read(cx)
@@ -104,9 +138,9 @@ impl Code {
             this.sync(&key, event, cx);
         });
 
-        self.editors.insert(path.to_path_buf(), state);
         self.texts.insert(path.to_path_buf(), rope);
         self.subs.insert(path.to_path_buf(), vec![touch, sync]);
+        state
     }
 
     fn sync(&mut self, path: &Path, event: &editor::Edits, cx: &mut Context<Self>) {
@@ -142,6 +176,7 @@ impl Code {
         };
         self.bench.update(cx, |bench, _| bench.focus(&path));
         self.focus(window, cx);
+        self.announce(cx);
         cx.notify();
     }
 
@@ -152,10 +187,11 @@ impl Code {
         self.bench.update(cx, |bench, _| bench.close(&path));
         self.hub.update(cx, |hub, _| hub.close(&path));
         self.reap(cx);
-        self.editors.remove(&path);
+        self.views.remove(&path);
         self.texts.remove(&path);
         self.subs.remove(&path);
         self.focus(window, cx);
+        self.announce(cx);
         cx.notify();
     }
 
@@ -168,6 +204,12 @@ impl Code {
         .detach();
     }
 
+    fn announce(&self, cx: &mut Context<Self>) {
+        if let Some((path, _)) = self.active(cx) {
+            cx.emit(Event::Active(path));
+        }
+    }
+
     fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((_, state)) = self.active(cx) {
             state.update(cx, |state, cx| state.focus(window, cx));
@@ -176,8 +218,20 @@ impl Code {
 
     fn active(&self, cx: &Context<Self>) -> Option<(PathBuf, Entity<editor::State>)> {
         let path = self.bench.read(cx).tabs().active()?.path().to_path_buf();
-        let state = self.editors.get(&path)?.clone();
-        Some((path, state))
+        match self.views.get(&path)? {
+            View::Text(state) => Some((path, state.clone())),
+            View::Image | View::Binary(_) => None,
+        }
+    }
+
+    fn body(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let path = self.bench.read(cx).tabs().active()?.path();
+        let body = match self.views.get(path)? {
+            View::Text(state) => editor::view(state).into_any_element(),
+            View::Image => viewer::Image::new(path).into_any_element(),
+            View::Binary(size) => viewer::Binary::new(*size).into_any_element(),
+        };
+        Some(body)
     }
 
     fn path_at(&self, ix: usize, cx: &Context<Self>) -> Option<PathBuf> {
@@ -201,7 +255,7 @@ impl Render for Code {
             })
             .collect();
         let active = tabs.active_ix();
-        let editor = self.active(cx).map(|(_, state)| editor::view(&state));
+        let body = self.body(cx);
 
         let pick = cx.entity().downgrade();
         let close = pick.clone();
@@ -220,6 +274,6 @@ impl Render for Code {
                         close.update(cx, |this, cx| this.close(ix, window, cx)).ok();
                     }),
             )
-            .child(div().flex_1().min_h_0().children(editor))
+            .child(div().flex_1().min_h_0().children(body))
     }
 }

@@ -6,8 +6,8 @@ use corvo_domain::{Node, Tree, Workbench};
 use corvo_ui::notice;
 use corvo_ui::tree::{Event as TreeEvent, Item, Panel, Row, State};
 use gpui_kit::{
-    AppContext as _, Context, Entity, EventEmitter, IntoElement, Render, SharedString,
-    Subscription, Window,
+    AppContext as _, Context, Entity, EventEmitter, IntoElement, Render, ScrollStrategy,
+    SharedString, Subscription, Window,
 };
 
 pub enum Event {
@@ -37,6 +37,22 @@ impl Files {
         files
     }
 
+    pub fn reveal(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        if let Err(err) = self.bench.update(cx, |bench, _| bench.reveal(path)) {
+            notice::error(err.to_string(), window, cx);
+        }
+        self.refresh(cx);
+
+        let id = SharedString::from(path.to_string_lossy().into_owned());
+        self.state.update(cx, |state, cx| {
+            let ix = state.index_of(&id);
+            state.set_selected_index(ix, cx);
+            if let Some(ix) = ix {
+                state.scroll_to_item(ix, ScrollStrategy::Nearest);
+            }
+        });
+    }
+
     fn on_tree(
         &mut self,
         _: &Entity<State>,
@@ -60,10 +76,12 @@ impl Files {
         self.refresh(cx);
     }
 
-    fn refresh(&mut self, cx: &mut Context<Self>) {
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let mut dirs = HashSet::new();
-        let tree = self.bench.read(cx).tree();
-        let items = items(tree, tree.root(), &mut dirs);
+        let items = match self.bench.read(cx).tree() {
+            Some(tree) => items(tree, tree.root(), &mut dirs),
+            None => Vec::new(),
+        };
         self.dirs = Rc::new(dirs);
 
         self.state.update(cx, |state, cx| {
