@@ -12,3 +12,11 @@ impl Kind for Ghost {
         button.ghost().xsmall()
     }
 }
+
+pub struct Primary;
+
+impl Kind for Primary {
+    fn style(&self, button: Button) -> Button {
+        button.primary()
+    }
+}

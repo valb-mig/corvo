@@ -6,7 +6,7 @@ use gpui_kit::component::IconName;
 use gpui_kit::component::button::Button as Base;
 use gpui_kit::{App, ClickEvent, ElementId, IntoElement, RenderOnce, SharedString, Window};
 
-pub use kind::{Ghost, Kind};
+pub use kind::{Ghost, Kind, Primary};
 
 type Handler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
@@ -32,6 +32,10 @@ impl Button {
 
     pub fn ghost(id: impl Into<ElementId>) -> Self {
         Self::new(id, Ghost)
+    }
+
+    pub fn primary(id: impl Into<ElementId>) -> Self {
+        Self::new(id, Primary)
     }
 
     pub fn icon(mut self, icon: IconName) -> Self {
