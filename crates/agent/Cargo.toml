@@ -1,0 +1,14 @@
+[package]
+name = "corvo-agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+corvo-domain.workspace = true
+agent-client-protocol-schema.workspace = true
+futures.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+futures.workspace = true

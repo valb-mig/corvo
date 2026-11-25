@@ -8,12 +8,14 @@ edition = "2024"
 repository = "https://github.com/valb-mig/corvo"
 
 [workspace.dependencies]
+corvo-agent = { path = "crates/agent" }
 corvo-domain = { path = "crates/domain" }
 corvo-fs = { path = "crates/fs" }
 corvo-ui = { path = "crates/ui" }
 corvo-lsp = { path = "crates/lsp" }
 corvo-syntax = { path = "crates/syntax" }
 gpui-kit = { version = "0.10", default-features = false }
+agent-client-protocol-schema = { version = "1.22", default-features = false }
 ignore = "0.4"
 anyhow = "1"
 futures = "0.3"
