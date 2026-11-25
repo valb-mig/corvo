@@ -1,11 +1,12 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use corvo_domain::port::Fs;
-use corvo_domain::{Content, Node, Workbench};
+use corvo_domain::port::{Depth, Fs, Syntax};
+use corvo_domain::{Content, Lang, Node, Symbol, SymbolKind, Workbench};
 
 #[derive(Clone, Default)]
 struct Memory {
@@ -36,6 +37,31 @@ impl Fs for Memory {
     }
 }
 
+struct Lines;
+
+impl Syntax for Lines {
+    fn outlines(&self, lang: Lang) -> bool {
+        lang == Lang::Rust
+    }
+
+    fn outline(&self, _: Lang, text: &str, _: Depth) -> Vec<Symbol> {
+        text.lines()
+            .enumerate()
+            .filter_map(|(ix, line)| {
+                let name = line.strip_prefix("fn ")?.split('(').next()?;
+                Some(Symbol::new(name, SymbolKind::Function, ix as u32, 3))
+            })
+            .collect()
+    }
+
+    fn mentions(&self, _: Lang, text: &str, name: &str, within: Range<usize>) -> Vec<Range<usize>> {
+        text[within.clone()]
+            .match_indices(name)
+            .map(|(ix, _)| within.start + ix..within.start + ix + name.len())
+            .collect()
+    }
+}
+
 fn project() -> Memory {
     let fs = Memory::default();
     fs.dirs.borrow_mut().insert(
@@ -55,7 +81,7 @@ fn project() -> Memory {
 }
 
 fn bench(fs: Memory) -> Workbench {
-    let mut bench = Workbench::new(Box::new(fs));
+    let mut bench = Workbench::new(Box::new(fs), Box::new(Lines));
     bench.show(Some(Path::new("/p"))).unwrap();
     bench
 }
@@ -175,4 +201,159 @@ fn save_writes_and_cleans() {
 
     assert_eq!(fs.files.borrow()[main], "fn main() { todo!() }");
     assert!(!bench.tabs().active().unwrap().is_dirty());
+}
+
+#[test]
+fn outline_reads_file_through_syntax() {
+    let bench = bench(project());
+
+    let symbols = bench
+        .outline(Path::new("/p/main.rs"), Depth::Items)
+        .unwrap();
+
+    assert_eq!(symbols, [Symbol::new("main", SymbolKind::Function, 0, 3)]);
+}
+
+#[test]
+fn outline_skips_languages_without_syntax() {
+    let bench = bench(project());
+    let path = Path::new("/q/index.ts");
+
+    assert!(!bench.outlines(path));
+    assert!(bench.outline(path, Depth::Items).unwrap().is_empty());
+}
+
+#[test]
+fn chart_lists_projects_and_isolating_surveys_once() {
+    let fs = project();
+    let mut bench = bench(fs.clone());
+    let before = *fs.lists.borrow();
+
+    bench
+        .chart(&[PathBuf::from("/p"), PathBuf::from("/q")])
+        .unwrap();
+    bench.isolate(Some(Path::new("/p"))).unwrap();
+    bench.isolate(Some(Path::new("/p"))).unwrap();
+
+    let atlas = bench.atlas();
+    assert_eq!(atlas.root(), Some(Path::new("/p")));
+    assert!(atlas.is_loaded(Path::new("/q")));
+    assert!(atlas.is_loaded(Path::new("/p/src")));
+    assert_eq!(*fs.lists.borrow() - before, 3);
+}
+
+#[test]
+fn toggling_opens_and_closes_with_what_is_inside() {
+    let mut bench = bench(project());
+    bench.chart(&[PathBuf::from("/p")]).unwrap();
+    bench.isolate(Some(Path::new("/p"))).unwrap();
+    let (src, main) = (Node::dir("/p/src"), Node::file("/p/main.rs"));
+
+    bench.toggle(&src).unwrap();
+    bench.toggle(&main).unwrap();
+    bench.toggle_symbol(main.path(), &[0]);
+
+    let atlas = bench.atlas();
+    assert!(atlas.is_open(src.path()) && atlas.is_open(main.path()));
+    assert!(atlas.is_dived(main.path(), &[0]));
+
+    bench.toggle(&main).unwrap();
+    let atlas = bench.atlas();
+    assert!(atlas.is_open(src.path()));
+    assert!(!atlas.is_open(main.path()));
+    assert!(!atlas.is_dived(main.path(), &[0]));
+}
+
+#[test]
+fn rechart_reads_open_folders_and_files_again() {
+    let fs = project();
+    let mut bench = bench(fs.clone());
+    bench.chart(&[PathBuf::from("/p")]).unwrap();
+    bench.isolate(Some(Path::new("/p"))).unwrap();
+    bench.toggle(&Node::file("/p/main.rs")).unwrap();
+    assert_eq!(
+        bench.atlas().outline(Path::new("/p/main.rs")).unwrap(),
+        [Symbol::new("main", SymbolKind::Function, 0, 3)]
+    );
+    fs.dirs
+        .borrow_mut()
+        .get_mut(Path::new("/p"))
+        .unwrap()
+        .push(Node::file("/p/new.rs"));
+    fs.files
+        .borrow_mut()
+        .insert("/p/main.rs".into(), "fn main() {}\nfn run() {}".into());
+
+    bench.rechart().unwrap();
+
+    let atlas = bench.atlas();
+    assert_eq!(atlas.children(Path::new("/p")).unwrap().len(), 3);
+    assert_eq!(atlas.outline(Path::new("/p/main.rs")).unwrap().len(), 2);
+}
+
+#[test]
+fn a_file_that_cannot_be_read_stays_closed() {
+    let mut bench = bench(project());
+    bench.chart(&[PathBuf::from("/p")]).unwrap();
+    bench.isolate(Some(Path::new("/p"))).unwrap();
+    let gone = Node::file("/p/gone.rs");
+
+    assert!(bench.toggle(&gone).is_err());
+    assert!(!bench.atlas().is_open(gone.path()));
+}
+
+fn script() -> Memory {
+    let fs = project();
+    fs.files.borrow_mut().insert(
+        "/p/main.rs".into(),
+        "fn main() {\n    let n = 1;\n    go(n);\n}\nfn go(n: u8) {}\n".into(),
+    );
+    fs
+}
+
+#[test]
+fn excerpt_reads_the_lines_of_a_symbol() {
+    let bench = bench(script());
+
+    let text = bench.excerpt(Path::new("/p/main.rs"), 1, 2).unwrap();
+
+    assert_eq!(text, "    let n = 1;\n    go(n);");
+    assert!(bench.excerpt(Path::new("/p/main.rs"), 3, 40).is_err());
+}
+
+#[test]
+fn splice_writes_over_the_lines_it_read() {
+    let fs = script();
+    let mut bench = bench(fs.clone());
+    let main = Path::new("/p/main.rs");
+
+    let new = bench
+        .splice(main, 1, 2, "    let n = 1;\n    go(n);", "    go(2);")
+        .unwrap();
+
+    assert_eq!(new, "fn main() {\n    go(2);\n}\nfn go(n: u8) {}\n");
+    assert_eq!(fs.files.borrow()[main], new);
+}
+
+#[test]
+fn splice_refuses_lines_that_changed() {
+    let fs = script();
+    let mut bench = bench(fs.clone());
+    let main = Path::new("/p/main.rs");
+
+    assert!(bench.splice(main, 1, 1, "    let m = 1;", "x").is_err());
+    assert!(fs.files.borrow()[main].contains("let n = 1;"));
+}
+
+#[test]
+fn mentions_stay_inside_the_given_lines() {
+    let bench = bench(script());
+    let main = Path::new("/p/main.rs");
+
+    let inside = bench.mentions(main, "n", Some((0, 3))).unwrap();
+    let lines: Vec<_> = inside.iter().map(|mention| mention.line()).collect();
+    assert_eq!(lines, [0, 1, 2]);
+
+    let all = bench.mentions(main, "n", None).unwrap();
+    assert_eq!(all.len(), 4);
 }

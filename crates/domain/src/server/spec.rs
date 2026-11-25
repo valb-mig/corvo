@@ -7,6 +7,7 @@ pub struct Spec {
     args: Vec<String>,
     langs: Vec<Lang>,
     markers: Vec<String>,
+    stack: Option<String>,
     hint: String,
 }
 
@@ -18,6 +19,7 @@ impl Spec {
             args: Vec::new(),
             langs: Vec::new(),
             markers: Vec::new(),
+            stack: None,
             hint: String::new(),
         }
     }
@@ -45,6 +47,11 @@ impl Spec {
         self
     }
 
+    pub fn stack(mut self, stack: impl Into<String>) -> Self {
+        self.stack = Some(stack.into());
+        self
+    }
+
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = hint.into();
         self
@@ -68,6 +75,10 @@ impl Spec {
 
     pub fn root_markers(&self) -> &[String] {
         &self.markers
+    }
+
+    pub fn stack_name(&self) -> Option<&str> {
+        self.stack.as_deref()
     }
 
     pub fn install_hint(&self) -> &str {
