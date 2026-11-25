@@ -1,4 +1,10 @@
-use corvo_ui::graph::{GAP, HEIGHT, PAD, SPAN, Shape, Spot, View, WIDTH, ZOOM_MIN, fit, layout};
+use std::collections::HashMap;
+
+use corvo_ui::graph::{
+    GAP, HEIGHT, PAD, RIM, SPAN, Shape, Spot, TITLE, View, WIDTH, ZOOM_MIN, fit, frame, heads,
+    hull, layout, span, touches,
+};
+use gpui_kit::SharedString;
 
 fn card(children: Vec<Shape>) -> Shape {
     Shape {
@@ -125,4 +131,52 @@ fn a_huge_graph_stops_at_the_least_zoom() {
     let (zoom, _) = fit((100_000., 100_000.), (1000., 800.));
 
     assert_eq!(zoom, ZOOM_MIN);
+}
+
+#[test]
+fn the_hull_wraps_every_box_and_none_wraps_nothing() {
+    let boxes = [
+        (10., 40., 100., 20.),
+        (60., 0., 20., 10.),
+        (0., 30., 5., 5.),
+    ];
+
+    assert_eq!(hull(boxes), Some((0., 0., 110., 60.)));
+    assert_eq!(hull([]), None);
+}
+
+#[test]
+fn a_frame_leaves_room_around_its_cards_and_its_title_on_top() {
+    let (x, y, w, h) = frame((100., 200., WIDTH, HEIGHT));
+
+    assert_eq!((x, y), (100. - RIM, 200. - RIM - TITLE));
+    assert_eq!((w, h), (WIDTH + 2. * RIM, HEIGHT + 2. * RIM + TITLE));
+}
+
+#[test]
+fn a_box_drawn_either_way_picks_the_cards_it_touches() {
+    let area = span((300., 120.), (100., 20.));
+
+    assert_eq!(area, (100., 20., 200., 100.));
+    assert!(touches(area, (280., 110., WIDTH, HEIGHT)));
+    assert!(touches(area, (0., 0., 100., 20.)));
+    assert!(!touches(area, (301., 0., WIDTH, HEIGHT)));
+}
+
+#[test]
+fn moving_cards_together_moves_only_those_nothing_else_picked_holds() {
+    let id = |name: &str| SharedString::from(name.to_owned());
+    let holders: HashMap<_, _> = [
+        ("src", "root"),
+        ("lib", "src"),
+        ("fn", "lib"),
+        ("docs", "root"),
+    ]
+    .into_iter()
+    .map(|(card, holder)| (id(card), id(holder)))
+    .collect();
+
+    let moved = heads(&[id("fn"), id("docs"), id("src")], &holders);
+
+    assert_eq!(moved, [id("docs"), id("src")]);
 }

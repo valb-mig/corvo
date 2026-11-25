@@ -4,7 +4,7 @@ use corvo_domain::keymap::{Binding, Command, Keymap, Scope};
 use gpui_kit::component::input::{GoToDefinition, Redo, ShowCompletions, Undo};
 use gpui_kit::{Action, App, KeyBinding, KeyBindingContextPredicate, actions};
 
-actions!(corvo, [Save]);
+actions!(corvo, [Save, ShowCode, Dismiss]);
 
 pub fn bind(keymap: &Keymap, cx: &mut App) {
     let bindings: Vec<_> = keymap
@@ -29,6 +29,8 @@ fn action(command: Command) -> Box<dyn Action> {
         Command::Redo => Box::new(Redo),
         Command::Complete => Box::new(ShowCompletions),
         Command::Definition => Box::new(GoToDefinition),
+        Command::ShowCode => Box::new(ShowCode),
+        Command::Dismiss => Box::new(Dismiss),
     }
 }
 

@@ -1,3 +1,4 @@
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::{Context, Entity, IntoElement, SharedString, Window};
 
@@ -15,4 +16,9 @@ pub fn state(
 
 pub fn view(state: &Entity<State>) -> impl IntoElement + use<> {
     Input::new(state)
+}
+
+// A field that fits a line of small text, as in a title.
+pub fn compact(state: &Entity<State>) -> impl IntoElement + use<> {
+    Input::new(state).xsmall()
 }

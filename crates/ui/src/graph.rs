@@ -1,10 +1,10 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic;
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName as Glyph;
-use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
@@ -17,7 +17,9 @@ use gpui_kit::{
 
 // Cards as a tree read left to right: an open card holds its cards in the next column, with a
 // curve to each, and any number of cards can be open at once. A card can drop a panel down from
-// under its header; its column widens to hold it.
+// under its header; its column widens to hold it. Cards can be picked, with Ctrl or Shift on a
+// click or a box drawn with Shift, to group or hide them together; a group is a frame around its
+// cards, or one card in their place when collapsed.
 
 pub const WIDTH: f32 = 232.;
 pub const HEIGHT: f32 = 52.;
@@ -26,12 +28,20 @@ pub const SPAN: f32 = 72.;
 pub const PAD: f32 = 24.;
 pub const ZOOM_MIN: f32 = 0.3;
 pub const ZOOM_MAX: f32 = 2.;
+// The room a group's frame leaves around its cards, and the height of its title.
+pub const RIM: f32 = 12.;
+pub const TITLE: f32 = 28.;
 
 const ICON: f32 = 16.;
 const STEP: f32 = 1.2;
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 type Draw = Box<dyn Fn(Pixels) -> AnyElement>;
+type Keys = Rc<dyn Fn(Vec<SharedString>, &mut Window, &mut App)>;
+type Moves = Rc<dyn Fn(Vec<(SharedString, (f32, f32))>, &mut Window, &mut App)>;
+
+// A box in graph space: left, top, width and height.
+pub type Rect = (f32, f32, f32, f32);
 
 pub struct Card {
     id: SharedString,
@@ -40,6 +50,7 @@ pub struct Card {
     meta: Option<SharedString>,
     badge: Option<SharedString>,
     muted: bool,
+    selectable: bool,
     on_click: Option<Handler>,
     actions: Vec<Action>,
     drop: Option<Drop>,
@@ -67,10 +78,15 @@ impl Card {
             meta: None,
             badge: None,
             muted: false,
+            selectable: true,
             on_click: None,
             actions: Vec::new(),
             drop: None,
         }
+    }
+
+    pub fn id(&self) -> &SharedString {
+        &self.id
     }
 
     // The icon, drawn at the size the zoom asks for.
@@ -91,6 +107,12 @@ impl Card {
 
     pub fn muted(mut self, muted: bool) -> Self {
         self.muted = muted;
+        self
+    }
+
+    // Whether it can be picked to act on with others; a note can't.
+    pub fn selectable(mut self, selectable: bool) -> Self {
+        self.selectable = selectable;
         self
     }
 
@@ -128,6 +150,90 @@ impl Card {
         match &self.drop {
             Some(drop) => (drop.width.max(WIDTH), HEIGHT + drop.height),
             None => (WIDTH, HEIGHT),
+        }
+    }
+}
+
+// Cards put together under a title, each known by its id: a frame around those in sight and all
+// they hold, or one card in their place when collapsed. Dragging the title, or that card, moves
+// them all.
+pub struct Group {
+    id: SharedString,
+    title: SharedString,
+    members: Vec<SharedString>,
+    collapsed: bool,
+    editor: Option<AnyElement>,
+    on_click: Option<Handler>,
+    actions: Vec<Action>,
+}
+
+impl Group {
+    pub fn new(
+        id: impl Into<SharedString>,
+        title: impl Into<SharedString>,
+        members: impl IntoIterator<Item = SharedString>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            members: members.into_iter().collect(),
+            collapsed: false,
+            editor: None,
+            on_click: None,
+            actions: Vec::new(),
+        }
+    }
+
+    pub fn collapsed(mut self, collapsed: bool) -> Self {
+        self.collapsed = collapsed;
+        self
+    }
+
+    // Shown in place of the title, to type a new one in.
+    pub fn editor(mut self, editor: impl IntoElement) -> Self {
+        self.editor = Some(editor.into_any_element());
+        self
+    }
+
+    // What a click on the card of the collapsed group does.
+    pub fn on_click(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_click = Some(Rc::new(f));
+        self
+    }
+
+    pub fn action(
+        mut self,
+        label: impl Into<SharedString>,
+        glyph: Glyph,
+        run: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.actions.push(Action {
+            label: label.into(),
+            glyph,
+            run: Rc::new(run),
+        });
+        self
+    }
+
+    // The card that stands for the group while it is collapsed.
+    fn stand_in(self, count: usize) -> Card {
+        let meta = match count {
+            1 => "1 card".to_owned(),
+            n => format!("{n} cards"),
+        };
+        Card {
+            id: self.id,
+            icon: Some(Box::new(|size| {
+                Icon::new(Glyph::Group).size(size).into_any_element()
+            })),
+            title: self.title,
+            meta: Some(meta.into()),
+            badge: None,
+            muted: false,
+            selectable: false,
+            on_click: self.on_click,
+            actions: self.actions,
+            drop: None,
         }
     }
 }
@@ -265,8 +371,8 @@ impl View {
     }
 }
 
-// Where a graph is looked at from, free of any edge: how far it is moved and how close. It lives
-// with the graph's owner between renders.
+// Where a graph is looked at from, free of any edge: how far it is moved and how close, and the
+// cards picked. It lives with the graph's owner between renders.
 #[derive(Clone, Default)]
 pub struct Camera {
     lens: Rc<RefCell<Lens>>,
@@ -278,21 +384,30 @@ struct Lens {
     // The viewport, as last painted.
     bounds: Bounds<Pixels>,
     drag: Option<Drag>,
-    // The drag went far enough to be one, so the click it ends in is not a click.
-    dragged: bool,
-    // How far each card was moved by hand, in graph space; what it holds moves with it.
+    // The press went to a drag or a pick, so the click it ends in is not a click.
+    spent: bool,
+    // The cards picked to act on together.
+    picked: Vec<SharedString>,
+    // As last laid out: how far each card was moved by hand, the box of each card that can be
+    // picked, and the card that holds each.
     nudges: HashMap<SharedString, (f32, f32)>,
+    boxes: Vec<(SharedString, Rect)>,
+    holders: HashMap<SharedString, SharedString>,
     // The size of the graph at zoom 1, as last laid out.
     extent: (f32, f32),
     // Fit the graph to the viewport on the next paint, once its size is known.
     fit: bool,
 }
 
-// What a drag moves, where the mouse was pressed, and where that was before.
 #[derive(Clone)]
 enum Drag {
+    // Where the mouse was pressed, and the offset then.
     View(Point<Pixels>, (f32, f32)),
-    Card(SharedString, Point<Pixels>, (f32, f32)),
+    // Where the mouse was pressed, the cards moved together with how far each was moved before,
+    // and how far they went since, in graph space.
+    Cards(Point<Pixels>, Vec<(SharedString, (f32, f32))>, (f32, f32)),
+    // A box picking every card it touches, from where it was pressed to the mouse, in graph space.
+    Pick((f32, f32), (f32, f32)),
 }
 
 impl Default for Lens {
@@ -302,8 +417,11 @@ impl Default for Lens {
             offset: (0., 0.),
             bounds: Bounds::default(),
             drag: None,
-            dragged: false,
+            spent: false,
+            picked: Vec::new(),
             nudges: HashMap::new(),
+            boxes: Vec::new(),
+            holders: HashMap::new(),
             extent: (0., 0.),
             fit: false,
         }
@@ -349,70 +467,174 @@ impl Camera {
         (f32::from(at.x), f32::from(at.y))
     }
 
-    fn dragged(&self) -> bool {
-        self.lens.borrow().dragged
+    // The graph point under a window point.
+    fn under(&self, at: Point<Pixels>) -> (f32, f32) {
+        let local = self.local(at);
+        View::new(self.zoom()).under(local, self.offset())
     }
 
-    // A press on a card's header takes the card along when the mouse moves.
-    fn grab(&self, id: SharedString, at: Point<Pixels>) {
-        let mut lens = self.lens.borrow_mut();
-        let from = lens.nudges.get(&id).copied().unwrap_or_default();
-        lens.drag = Some(Drag::Card(id, at, from));
-        lens.dragged = false;
+    fn spent(&self) -> bool {
+        self.lens.borrow().spent
     }
 
-    // A press anywhere else moves the view, unless it was a card's.
-    fn press(&self, at: Point<Pixels>) {
+    fn drag(&self) -> Option<Drag> {
+        self.lens.borrow().drag.clone()
+    }
+
+    fn is_picked(&self, id: &SharedString) -> bool {
+        self.lens.borrow().picked.contains(id)
+    }
+
+    // The cards picked, when the given one is among two or more of them.
+    fn picked_with(&self, id: &SharedString) -> Option<Vec<SharedString>> {
+        let lens = self.lens.borrow();
+        (lens.picked.len() > 1 && lens.picked.contains(id)).then(|| lens.picked.clone())
+    }
+
+    pub fn unpick(&self) {
+        self.lens.borrow_mut().picked.clear();
+    }
+
+    // A press on a card's header. With `toggle` it picks the card, or lets it go; otherwise the
+    // card goes along when the mouse moves, with the others picked when it is one of them.
+    fn grab(&self, id: &SharedString, at: Point<Pixels>, toggle: bool) {
         let mut lens = self.lens.borrow_mut();
-        if matches!(&lens.drag, Some(Drag::Card(_, start, _)) if *start == at) {
+        lens.spent = false;
+        if toggle {
+            match lens.picked.iter().position(|picked| picked == id) {
+                Some(ix) => {
+                    lens.picked.remove(ix);
+                }
+                None => lens.picked.push(id.clone()),
+            }
+            lens.spent = true;
+            lens.drag = None;
             return;
         }
-        lens.drag = Some(Drag::View(at, lens.offset));
-        lens.dragged = false;
+        if !lens.picked.contains(id) {
+            lens.picked.clear();
+        }
+        let keys = if lens.picked.is_empty() {
+            vec![id.clone()]
+        } else {
+            heads(&lens.picked, &lens.holders)
+        };
+        let from = keys
+            .into_iter()
+            .map(|key| {
+                let by = lens.nudges.get(&key).copied().unwrap_or_default();
+                (key, by)
+            })
+            .collect();
+        lens.drag = Some(Drag::Cards(at, from, (0., 0.)));
     }
 
-    // Follows the mouse with what was pressed; false once no drag goes on.
-    fn follow(&self, at: Point<Pixels>, held: bool) -> bool {
+    // A press that takes the given cards along when the mouse moves: a group's.
+    fn carry(&self, keys: &[SharedString], at: Point<Pixels>) {
         let mut lens = self.lens.borrow_mut();
+        let from = keys
+            .iter()
+            .map(|key| {
+                (
+                    key.clone(),
+                    lens.nudges.get(key).copied().unwrap_or_default(),
+                )
+            })
+            .collect();
+        lens.spent = false;
+        lens.drag = Some(Drag::Cards(at, from, (0., 0.)));
+    }
+
+    // A press anywhere else moves the view, or with `pick` draws a box to pick cards with.
+    fn press(&self, at: Point<Pixels>, pick: bool) {
+        let p = self.under(at);
+        let mut lens = self.lens.borrow_mut();
+        lens.spent = false;
+        lens.drag = Some(if pick {
+            lens.picked.clear();
+            Drag::Pick(p, p)
+        } else {
+            Drag::View(at, lens.offset)
+        });
+    }
+
+    // Follows the held mouse with what was pressed; false when nothing moves.
+    fn follow(&self, at: Point<Pixels>) -> bool {
+        let p = self.under(at);
+        let mut lens = self.lens.borrow_mut();
+        let zoom = lens.zoom;
         let Some(drag) = lens.drag.clone() else {
             return false;
         };
-        if !held {
-            lens.drag = None;
-            return false;
-        }
-        let (start, from) = match &drag {
-            Drag::View(start, from) | Drag::Card(_, start, from) => (*start, *from),
-        };
-        let delta = at - start;
-        let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
-        if dx.abs() + dy.abs() > 4. {
-            lens.dragged = true;
-        }
         match drag {
-            Drag::View(..) => lens.offset = (from.0 + dx, from.1 + dy),
-            Drag::Card(id, ..) => {
-                let zoom = lens.zoom;
-                lens.nudges
-                    .insert(id, (from.0 + dx / zoom, from.1 + dy / zoom));
+            Drag::View(start, from) => {
+                let (dx, dy) = apart(start, at);
+                lens.spent |= dx.abs() + dy.abs() > 4.;
+                lens.offset = (from.0 + dx, from.1 + dy);
+            }
+            Drag::Cards(start, from, _) => {
+                let (dx, dy) = apart(start, at);
+                lens.spent |= dx.abs() + dy.abs() > 4.;
+                lens.drag = Some(Drag::Cards(start, from, (dx / zoom, dy / zoom)));
+            }
+            Drag::Pick(start, _) => {
+                let area = span(start, p);
+                lens.picked = lens
+                    .boxes
+                    .iter()
+                    .filter(|(_, rect)| touches(area, *rect))
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                lens.spent = true;
+                lens.drag = Some(Drag::Pick(start, p));
             }
         }
         true
     }
 
-    fn release(&self) {
-        self.lens.borrow_mut().drag = None;
-    }
-
-    pub fn is_rearranged(&self) -> bool {
-        !self.lens.borrow().nudges.is_empty()
-    }
-
-    // Every card back where the layout puts it, and the whole graph centred in view.
-    pub fn reorganize(&self) {
+    // Ends the press: a click on the background lets the picked cards go, and cards dragged give
+    // where each was moved to.
+    fn release(&self) -> Option<Vec<(SharedString, (f32, f32))>> {
         let mut lens = self.lens.borrow_mut();
-        lens.nudges.clear();
-        lens.fit = true;
+        match lens.drag.take()? {
+            Drag::View(..) => {
+                if !lens.spent {
+                    lens.picked.clear();
+                }
+                None
+            }
+            Drag::Pick(..) => None,
+            Drag::Cards(_, from, by) => lens.spent.then(|| {
+                from.into_iter()
+                    .map(|(key, at)| (key, (at.0 + by.0, at.1 + by.1)))
+                    .collect()
+            }),
+        }
+    }
+
+    // Keeps what the last layout knows, for the presses to come.
+    fn remember(
+        &self,
+        nudges: HashMap<SharedString, (f32, f32)>,
+        boxes: Vec<(SharedString, Rect)>,
+        holders: HashMap<SharedString, SharedString>,
+        extent: (f32, f32),
+    ) {
+        let mut lens = self.lens.borrow_mut();
+        // A picked card no longer in sight is let go, unless a box is still picking.
+        if !matches!(lens.drag, Some(Drag::Pick(..))) {
+            lens.picked
+                .retain(|picked| boxes.iter().any(|(id, _)| id == picked));
+        }
+        lens.nudges = nudges;
+        lens.boxes = boxes;
+        lens.holders = holders;
+        lens.extent = extent;
+    }
+
+    // The whole graph centred in view on the next paint.
+    pub fn center(&self) {
+        self.lens.borrow_mut().fit = true;
     }
 
     // Records the viewport, fitting the graph to it when asked; true when the camera moved.
@@ -434,6 +656,66 @@ impl Camera {
         let size = self.lens.borrow().bounds.size;
         (f32::from(size.width) / 2., f32::from(size.height) / 2.)
     }
+}
+
+fn apart(start: Point<Pixels>, at: Point<Pixels>) -> (f32, f32) {
+    let delta = at - start;
+    (f32::from(delta.x), f32::from(delta.y))
+}
+
+// The box around the given boxes; none when there are none.
+pub fn hull(boxes: impl IntoIterator<Item = Rect>) -> Option<Rect> {
+    let mut boxes = boxes.into_iter();
+    let (x, y, w, h) = boxes.next()?;
+    let (mut left, mut top, mut right, mut bottom) = (x, y, x + w, y + h);
+    for (x, y, w, h) in boxes {
+        left = left.min(x);
+        top = top.min(y);
+        right = right.max(x + w);
+        bottom = bottom.max(y + h);
+    }
+    Some((left, top, right - left, bottom - top))
+}
+
+// The box between two corners, in any order.
+pub fn span(a: (f32, f32), b: (f32, f32)) -> Rect {
+    (
+        a.0.min(b.0),
+        a.1.min(b.1),
+        (a.0 - b.0).abs(),
+        (a.1 - b.1).abs(),
+    )
+}
+
+pub fn touches(a: Rect, b: Rect) -> bool {
+    a.0 <= b.0 + b.2 && b.0 <= a.0 + a.2 && a.1 <= b.1 + b.3 && b.1 <= a.1 + a.3
+}
+
+// The frame of a group around the box of its cards: room on every side, and its title on top.
+pub fn frame((x, y, w, h): Rect) -> Rect {
+    (x - RIM, y - RIM - TITLE, w + 2. * RIM, h + 2. * RIM + TITLE)
+}
+
+// Those of the keys that no other of them holds, however far up: moving them moves the rest
+// along, so nothing moves twice.
+pub fn heads(
+    keys: &[SharedString],
+    holders: &HashMap<SharedString, SharedString>,
+) -> Vec<SharedString> {
+    let all: HashSet<&SharedString> = keys.iter().collect();
+    keys.iter()
+        .filter(|key| {
+            let mut up = holders.get(*key);
+            while let Some(holder) = up {
+                if all.contains(holder) {
+                    return false;
+                }
+                up = holders.get(holder);
+            }
+            true
+        })
+        .cloned()
+        .collect()
 }
 
 // The zoom and offset that show a graph of the given size whole and centred in the viewport,
@@ -534,6 +816,12 @@ pub struct Graph {
     id: ElementId,
     camera: Camera,
     root: Branch,
+    nudges: HashMap<SharedString, (f32, f32)>,
+    groups: Vec<Group>,
+    on_move: Option<Moves>,
+    on_group: Option<Keys>,
+    on_hide: Option<Keys>,
+    on_reorganize: Option<Handler>,
 }
 
 impl Graph {
@@ -542,7 +830,57 @@ impl Graph {
             id: id.into(),
             camera: camera.clone(),
             root,
+            nudges: HashMap::new(),
+            groups: Vec::new(),
+            on_move: None,
+            on_group: None,
+            on_hide: None,
+            on_reorganize: None,
         }
+    }
+
+    // How far each card was moved by hand, by its id; what it holds moves with it.
+    pub fn nudges(mut self, nudges: HashMap<SharedString, (f32, f32)>) -> Self {
+        self.nudges = nudges;
+        self
+    }
+
+    pub fn groups(mut self, groups: impl IntoIterator<Item = Group>) -> Self {
+        self.groups.extend(groups);
+        self
+    }
+
+    // Cards were dragged: where each of those moved is now moved to.
+    pub fn on_move(
+        mut self,
+        f: impl Fn(Vec<(SharedString, (f32, f32))>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_move = Some(Rc::new(f));
+        self
+    }
+
+    // Asked from the menu of picked cards: put them in a group.
+    pub fn on_group(
+        mut self,
+        f: impl Fn(Vec<SharedString>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_group = Some(Rc::new(f));
+        self
+    }
+
+    // Asked from the menu of picked cards: hide them all.
+    pub fn on_hide(
+        mut self,
+        f: impl Fn(Vec<SharedString>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_hide = Some(Rc::new(f));
+        self
+    }
+
+    // Asked from the zoom bar, once cards were moved: put them back where the layout says.
+    pub fn on_reorganize(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_reorganize = Some(Rc::new(f));
+        self
     }
 }
 
@@ -555,23 +893,191 @@ impl RenderOnce for Graph {
         let view = View::new(camera.zoom());
         let zoom = view.zoom;
         let (line, lit) = (theme.muted_foreground.opacity(0.45), theme.blue);
+        let drag = camera.drag();
 
-        let mut edges = Vec::new();
-        let mut flat = Vec::new();
-        let nudges = camera.lens.borrow().nudges.clone();
-        camera.lens.borrow_mut().extent = (layout.width, layout.height);
+        // Where each card goes: the layout, moved by hand and by the drag going on.
+        let mut nudges = self.nudges.clone();
+        if let Some(Drag::Cards(_, from, by)) = &drag {
+            for (key, at) in from {
+                nudges.insert(key.clone(), (at.0 + by.0, at.1 + by.1));
+            }
+        }
+        let mut placed = Vec::new();
         let mut placing = Placing {
             nudges: &nudges,
-            cards: &mut flat,
-            edges: &mut edges,
+            placed: &mut placed,
         };
-        placing.lay(self.root, &shape, &layout.root, (0., 0.));
-        let mut cards = Vec::new();
-        for (card, open, (x, y), (w, h)) in flat {
-            let (x, y) = view.at((x, y));
-            let frame = (x, y, w * zoom, h * zoom);
-            cards.push(card_element(card, frame, open, zoom, &camera, cx));
+        placing.lay(self.root, &shape, &layout.root, (0., 0.), None);
+
+        // The collapsed group each card is out of sight in: that of a card holding it, or its own.
+        let folds: HashMap<&SharedString, usize> = self
+            .groups
+            .iter()
+            .enumerate()
+            .filter(|(_, group)| group.collapsed)
+            .flat_map(|(gx, group)| group.members.iter().map(move |id| (id, gx)))
+            .collect();
+        let mut tucked: Vec<Option<usize>> = Vec::with_capacity(placed.len());
+        for card in &placed {
+            let by = card
+                .holder
+                .and_then(|holder| tucked[holder])
+                .or_else(|| folds.get(&card.card.id).copied());
+            tucked.push(by);
         }
+        let rect = |ix: usize| {
+            let card = &placed[ix];
+            (card.at.0, card.at.1, card.size.0, card.size.1)
+        };
+        let index: HashMap<&SharedString, usize> = placed
+            .iter()
+            .enumerate()
+            .map(|(ix, card)| (&card.card.id, ix))
+            .collect();
+        let holders: HashMap<SharedString, SharedString> = placed
+            .iter()
+            .filter_map(|card| Some((card.card.id.clone(), placed[card.holder?].card.id.clone())))
+            .collect();
+        let boxes = (0..placed.len())
+            .filter(|ix| tucked[*ix].is_none() && placed[*ix].card.selectable)
+            .map(|ix| (placed[ix].card.id.clone(), rect(ix)))
+            .collect();
+
+        // Each group around its cards in sight and all they hold, or in their place when
+        // collapsed.
+        let mut frames = Vec::new();
+        let mut stands = Vec::new();
+        let mut stood = vec![None; self.groups.len()];
+        for (gx, group) in self.groups.into_iter().enumerate() {
+            let want = group.collapsed.then_some(gx);
+            let members: Vec<usize> = group
+                .members
+                .iter()
+                .filter_map(|id| index.get(id).copied())
+                .filter(|ix| tucked[*ix] == want)
+                .collect();
+            let wrapped = if group.collapsed {
+                members.clone()
+            } else {
+                held(&placed, &members)
+                    .into_iter()
+                    .filter(|ix| tucked[*ix].is_none())
+                    .collect()
+            };
+            let Some(hull) = hull(wrapped.iter().map(|ix| rect(*ix))) else {
+                continue;
+            };
+            let keys: Vec<SharedString> = members
+                .iter()
+                .map(|ix| placed[*ix].card.id.clone())
+                .collect();
+            let movers = heads(&keys, &holders);
+            if group.collapsed {
+                stood[gx] = Some((hull.0, hull.1));
+                stands.push((group, (hull.0, hull.1), movers, keys.len()));
+            } else {
+                frames.push((group, frame(hull), movers, keys.len()));
+            }
+        }
+
+        // A curve from a card's header to the header of each card it holds, lit to the open ones;
+        // one to a collapsed group from each card holding some of its cards.
+        let mut edges = Vec::new();
+        let mut joined = HashSet::new();
+        for (ix, card) in placed.iter().enumerate() {
+            let Some(hx) = card.holder.filter(|hx| tucked[*hx].is_none()) else {
+                continue;
+            };
+            let holder = &placed[hx];
+            let from = (holder.at.0 + holder.size.0, holder.at.1 + HEIGHT / 2.);
+            match tucked[ix] {
+                None => edges.push(Edge {
+                    from,
+                    to: (card.at.0, card.at.1 + HEIGHT / 2.),
+                    stroke: if card.open { Stroke::Lit } else { Stroke::Tree },
+                }),
+                Some(gx) => {
+                    if let Some(at) = stood[gx]
+                        && joined.insert((hx, gx))
+                    {
+                        edges.push(Edge {
+                            from,
+                            to: (at.0, at.1 + HEIGHT / 2.),
+                            stroke: Stroke::Tree,
+                        });
+                    }
+                }
+            }
+        }
+        camera.remember(self.nudges, boxes, holders, (layout.width, layout.height));
+
+        let hands = Hands {
+            camera: camera.clone(),
+            group: self.on_group,
+            hide: self.on_hide,
+        };
+        let mut cards = Vec::new();
+        for (card, out) in placed.into_iter().zip(tucked) {
+            if out.is_some() {
+                continue;
+            }
+            let (x, y) = view.at(card.at);
+            let frame = (x, y, card.size.0 * zoom, card.size.1 * zoom);
+            let look = Look {
+                open: card.open,
+                picked: camera.is_picked(&card.card.id),
+            };
+            cards.push(card_element(
+                card.card,
+                frame,
+                look,
+                Press::Card,
+                zoom,
+                &hands,
+                cx,
+            ));
+        }
+        for (group, at, movers, count) in stands {
+            let (x, y) = view.at(at);
+            let frame = (x, y, WIDTH * zoom, HEIGHT * zoom);
+            let card = group.stand_in(count);
+            let look = Look {
+                open: false,
+                picked: false,
+            };
+            cards.push(card_element(
+                card,
+                frame,
+                look,
+                Press::Carry(movers),
+                zoom,
+                &hands,
+                cx,
+            ));
+        }
+        let (frames, titles): (Vec<AnyElement>, Vec<AnyElement>) = frames
+            .into_iter()
+            .map(|(group, rect, movers, count)| {
+                frame_element(group, rect, movers, count, view, &camera, cx)
+            })
+            .unzip();
+        let pick = match &drag {
+            Some(Drag::Pick(from, to)) => Some(span(*from, *to)),
+            _ => None,
+        }
+        .map(|(x, y, w, h)| {
+            let (x, y) = view.at((x, y));
+            div()
+                .absolute()
+                .left(px(x))
+                .top(px(y))
+                .w(px(w * zoom))
+                .h(px(h * zoom))
+                .rounded_sm()
+                .border_1()
+                .border_color(theme.blue)
+                .bg(theme.blue.opacity(0.08))
+        });
         let (width, height) = view.at((layout.width, layout.height));
 
         // The wheel moves the graph; with Ctrl it zooms around the mouse.
@@ -596,6 +1102,7 @@ impl RenderOnce for Graph {
             .top(px(oy))
             .w(px(width))
             .h(px(height))
+            .children(frames)
             .child(
                 canvas(
                     |_, _, _| (),
@@ -604,14 +1111,18 @@ impl RenderOnce for Graph {
                 .absolute()
                 .size_full(),
             )
-            .children(cards);
+            .children(cards)
+            .children(titles)
+            .children(pick);
 
+        let untangle = self.on_reorganize.filter(|_| !nudges.is_empty());
         let (down, moved, up, seen) = (
             camera.clone(),
             camera.clone(),
             camera.clone(),
             camera.clone(),
         );
+        let (on_move, on_drop) = (self.on_move.clone(), self.on_move);
         div()
             .id(self.id)
             .relative()
@@ -619,16 +1130,33 @@ impl RenderOnce for Graph {
             .overflow_hidden()
             .bg(theme.background)
             .on_scroll(wheel)
-            .on_mouse_down(MouseButton::Left, move |event, _, _| {
-                down.press(event.position)
+            .on_mouse_down(MouseButton::Left, move |event, window, _| {
+                down.press(event.position, event.modifiers.shift);
+                window.refresh();
             })
-            .on_mouse_move(move |event, window, _| {
-                let held = event.pressed_button == Some(MouseButton::Left);
-                if moved.follow(event.position, held) {
+            .on_mouse_move(move |event, window, cx| {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    if moved.follow(event.position) {
+                        window.refresh();
+                    }
+                    return;
+                }
+                // Let go outside the graph.
+                if let Some(moves) = moved.release() {
+                    if let Some(f) = &on_move {
+                        f(moves, window, cx);
+                    }
                     window.refresh();
                 }
             })
-            .on_mouse_up(MouseButton::Left, move |_, _, _| up.release())
+            .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                if let Some(moves) = up.release()
+                    && let Some(f) = &on_drop
+                {
+                    f(moves, window, cx);
+                }
+                window.refresh();
+            })
             .child(
                 canvas(
                     |_, _, _| (),
@@ -645,11 +1173,11 @@ impl RenderOnce for Graph {
                 scale: zoom,
                 child: content.into_any_element(),
             })
-            .child(zoom_bar(&camera, cx))
+            .child(zoom_bar(&camera, untangle, cx))
     }
 }
 
-fn zoom_bar(camera: &Camera, cx: &App) -> impl IntoElement {
+fn zoom_bar(camera: &Camera, untangle: Option<Handler>, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     let button = |id: &'static str, glyph: Option<Glyph>, label: Option<String>| {
         div()
@@ -677,8 +1205,9 @@ fn zoom_bar(camera: &Camera, cx: &App) -> impl IntoElement {
     };
     let percent = format!("{:.0}%", camera.zoom() * 100.);
     // Back to the layout, when cards were moved by hand.
-    let untangle = camera.is_rearranged().then(|| {
-        button("untangle", Some(Glyph::LayoutDashboard), None).on_click(act(Camera::reorganize))
+    let untangle = untangle.map(|run| {
+        button("untangle", Some(Glyph::LayoutDashboard), None)
+            .on_click(move |_, window, cx| run(window, cx))
     });
     h_flex()
         .id("zoom")
@@ -714,48 +1243,62 @@ fn shape(branch: &Branch) -> Shape {
     }
 }
 
-// The cards in the order the shape walks them, each with where it goes and its size.
-type Placed = (Card, bool, (f32, f32), (f32, f32));
+// The given cards and every card they hold, however deep.
+fn held(placed: &[Placed], cards: &[usize]) -> Vec<usize> {
+    let mut inside = vec![false; placed.len()];
+    for (ix, card) in placed.iter().enumerate() {
+        inside[ix] = cards.contains(&ix) || card.holder.is_some_and(|holder| inside[holder]);
+    }
+    (0..placed.len()).filter(|ix| inside[*ix]).collect()
+}
+
+// A card where it goes, with its size, and the card that holds it.
+struct Placed {
+    card: Card,
+    open: bool,
+    at: (f32, f32),
+    size: (f32, f32),
+    holder: Option<usize>,
+}
 
 // Puts each card where the layout says, moved by its own nudge and those of the cards that hold
-// it, and draws a curve from a card's header to the header of each card it holds, lit to the
-// open ones.
+// it, in the order the shape walks them, so a card comes before those it holds.
 struct Placing<'a> {
     nudges: &'a HashMap<SharedString, (f32, f32)>,
-    cards: &'a mut Vec<Placed>,
-    edges: &'a mut Vec<Edge>,
+    placed: &'a mut Vec<Placed>,
 }
 
 impl Placing<'_> {
-    fn lay(&mut self, branch: Branch, shape: &Shape, spot: &Spot, carry: (f32, f32)) -> (f32, f32) {
+    fn lay(
+        &mut self,
+        branch: Branch,
+        shape: &Shape,
+        spot: &Spot,
+        carry: (f32, f32),
+        holder: Option<usize>,
+    ) {
         let own = self
             .nudges
             .get(&branch.card.id)
             .copied()
             .unwrap_or_default();
         let shift = (carry.0 + own.0, carry.1 + own.1);
-        let at = (spot.x + shift.0, spot.y + shift.1);
-        let from = (at.0 + shape.size.0, at.1 + HEIGHT / 2.);
-        self.cards.push((branch.card, branch.open, at, shape.size));
+        let ix = self.placed.len();
+        self.placed.push(Placed {
+            card: branch.card,
+            open: branch.open,
+            at: (spot.x + shift.0, spot.y + shift.1),
+            size: shape.size,
+            holder,
+        });
         let kids = branch
             .children
             .into_iter()
             .zip(&shape.children)
             .zip(&spot.children);
         for ((child, inner), place) in kids {
-            let stroke = if inner.open {
-                Stroke::Lit
-            } else {
-                Stroke::Tree
-            };
-            let to = self.lay(child, inner, place, shift);
-            self.edges.push(Edge {
-                from,
-                to: (to.0, to.1 + HEIGHT / 2.),
-                stroke,
-            });
+            self.lay(child, inner, place, shift, Some(ix));
         }
-        at
     }
 }
 
@@ -788,12 +1331,31 @@ fn paint(
     }
 }
 
+// What the cards' menus and presses reach: the camera, and what picked cards can be asked for.
+struct Hands {
+    camera: Camera,
+    group: Option<Keys>,
+    hide: Option<Keys>,
+}
+
+// What a press on a card's header takes along: the card, or a group's cards.
+enum Press {
+    Card,
+    Carry(Vec<SharedString>),
+}
+
+struct Look {
+    open: bool,
+    picked: bool,
+}
+
 fn card_element(
     card: Card,
     (x, y, w, h): (f32, f32, f32, f32),
-    picked: bool,
+    look: Look,
+    press: Press,
     zoom: f32,
-    camera: &Camera,
+    hands: &Hands,
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -805,11 +1367,23 @@ fn card_element(
     };
     let head_id = ElementId::Name(format!("{}:head", card.id).into());
     let clickable = card.on_click.is_some();
-    let grab = (camera.clone(), card.id.clone());
+    let selectable = card.selectable;
+    let grab = (hands.camera.clone(), card.id.clone());
     let head = h_flex()
         .id(head_id)
-        .on_mouse_down(MouseButton::Left, move |event, _, _| {
-            grab.0.grab(grab.1.clone(), event.position);
+        // The topmost card under the mouse takes the press, not those under it.
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            cx.stop_propagation();
+            let (camera, id) = &grab;
+            match &press {
+                Press::Card => {
+                    let held = event.modifiers;
+                    let toggle = selectable && (held.control || held.platform || held.shift);
+                    camera.grab(id, event.position, toggle);
+                }
+                Press::Carry(keys) => camera.carry(keys, event.position),
+            }
+            window.refresh();
         })
         .flex_shrink_0()
         .h(px(HEIGHT * zoom))
@@ -838,26 +1412,27 @@ fn card_element(
                 .map(|badge| Tag::secondary().xsmall().child(badge)),
         )
         .when_some(card.on_click, |el, f| {
-            let camera = camera.clone();
+            let camera = hands.camera.clone();
             el.cursor_pointer().on_click(move |_, window, cx| {
-                if !camera.dragged() {
+                if !camera.spent() {
                     f(window, cx);
                 }
             })
         });
-    let head = if card.actions.is_empty() {
+    // Picked with others, the card's menu is theirs: group them or hide them.
+    let together = selectable && (hands.group.is_some() || hands.hide.is_some());
+    let head = if card.actions.is_empty() && !together {
         head.into_any_element()
     } else {
         let actions = Rc::new(card.actions);
-        head.context_menu(move |mut menu, _, _| {
-            for action in actions.iter() {
-                let run = action.run.clone();
-                let item = PopupMenuItem::new(action.label.clone())
-                    .icon(action.glyph)
-                    .on_click(move |_, window, cx| run(window, cx));
-                menu = menu.item(item);
+        let (camera, id) = (hands.camera.clone(), card.id.clone());
+        let (group, hide) = (hands.group.clone(), hands.hide.clone());
+        head.context_menu(move |menu, _, _| match camera.picked_with(&id) {
+            Some(keys) if together => {
+                let menu = pick_item(menu, "Group…", Glyph::Group, &keys, &camera, &group);
+                pick_item(menu, "Hide selected", Glyph::EyeOff, &keys, &camera, &hide)
             }
-            menu
+            _ => fill(menu, &actions),
         })
         .into_any_element()
     };
@@ -874,6 +1449,11 @@ fn card_element(
             .on_scroll(|_, _, cx| cx.stop_propagation())
             .child(drop.element)
     });
+    let bg = if look.picked {
+        theme.sidebar.blend(theme.blue.opacity(0.14))
+    } else {
+        theme.sidebar
+    };
     v_flex()
         .id(ElementId::Name(card.id))
         .absolute()
@@ -884,12 +1464,132 @@ fn card_element(
         .overflow_hidden()
         .rounded_lg()
         .border_1()
-        .border_color(if picked { theme.blue } else { theme.border })
-        .bg(theme.sidebar)
-        .when(clickable && !picked, |el| {
+        .border_color(if look.open || look.picked {
+            theme.blue
+        } else {
+            theme.border
+        })
+        .bg(bg)
+        .when(clickable && !look.open && !look.picked, |el| {
             el.hover(move |style| style.border_color(muted))
         })
         .child(head)
         .children(drop)
         .into_any_element()
+}
+
+// An open group: a light fill behind its cards, and over them its title, which drags its cards
+// and opens its menu, so no card hides it.
+fn frame_element(
+    group: Group,
+    rect: Rect,
+    movers: Vec<SharedString>,
+    count: usize,
+    view: View,
+    camera: &Camera,
+    cx: &App,
+) -> (AnyElement, AnyElement) {
+    let theme = cx.theme();
+    let zoom = view.zoom;
+    let (x, y) = view.at((rect.0, rect.1));
+    let (w, h) = (rect.2 * zoom, rect.3 * zoom);
+    let body = div()
+        .absolute()
+        .left(px(x))
+        .top(px(y))
+        .w(px(w))
+        .h(px(h))
+        .rounded_lg()
+        .border_1()
+        .border_color(theme.blue.opacity(0.45))
+        .bg(theme.blue.opacity(0.05))
+        .into_any_element();
+    let title = match group.editor {
+        // Typing in the title neither drags the group nor moves the graph.
+        Some(editor) => div()
+            .w(px((WIDTH - 2. * RIM) * zoom))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(editor)
+            .into_any_element(),
+        None => h_flex()
+            .min_w_0()
+            .gap_1p5()
+            .child(
+                div()
+                    .truncate()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.foreground)
+                    .child(group.title),
+            )
+            .child(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child(count.to_string()),
+            )
+            .into_any_element(),
+    };
+    let carry = camera.clone();
+    let actions = Rc::new(group.actions);
+    let head = h_flex()
+        .id(ElementId::Name(format!("{}:title", group.id).into()))
+        .absolute()
+        .left(px(x))
+        .top(px(y))
+        .max_w(px(w))
+        .h(px(TITLE * zoom))
+        .px_2()
+        .gap_1p5()
+        .rounded_lg()
+        .border_1()
+        .border_color(theme.blue.opacity(0.45))
+        .bg(theme.sidebar.blend(theme.blue.opacity(0.18)))
+        .text_xs()
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            cx.stop_propagation();
+            carry.carry(&movers, event.position);
+            window.refresh();
+        })
+        .child(
+            Icon::new(Glyph::Group)
+                .size(px(12. * zoom))
+                .text_color(theme.blue),
+        )
+        .child(title)
+        .context_menu(move |menu, _, _| fill(menu, &actions))
+        .into_any_element();
+    (body, head)
+}
+
+fn fill(mut menu: PopupMenu, actions: &[Action]) -> PopupMenu {
+    for action in actions {
+        let run = action.run.clone();
+        let item = PopupMenuItem::new(action.label.clone())
+            .icon(action.glyph)
+            .on_click(move |_, window, cx| run(window, cx));
+        menu = menu.item(item);
+    }
+    menu
+}
+
+// An entry of the menu of picked cards, when the graph's owner answers it.
+fn pick_item(
+    menu: PopupMenu,
+    label: &'static str,
+    glyph: Glyph,
+    keys: &[SharedString],
+    camera: &Camera,
+    run: &Option<Keys>,
+) -> PopupMenu {
+    let Some(run) = run.clone() else {
+        return menu;
+    };
+    let (keys, camera) = (keys.to_vec(), camera.clone());
+    menu.item(
+        PopupMenuItem::new(label)
+            .icon(glyph)
+            .on_click(move |_, window, cx| {
+                camera.unpick();
+                run(keys.clone(), window, cx);
+            }),
+    )
 }

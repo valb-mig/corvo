@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod button;
 pub mod dropdown;
 pub mod editor;
