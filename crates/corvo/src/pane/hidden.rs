@@ -12,7 +12,7 @@ use gpui_kit::{
 
 use crate::pane::overview::Overview;
 
-// The cards hidden from the home, each with a way back, as the status bar opens it.
+// The cards and groups hidden from the home, each with a way back, as the status bar opens it.
 pub struct Hidden {
     bench: Entity<Workbench>,
     home: Entity<Overview>,
@@ -28,6 +28,12 @@ impl Hidden {
             .update(cx, |home, cx| home.show_hidden(place, window, cx));
         cx.notify();
     }
+
+    fn show_group(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.home
+            .update(cx, |home, cx| home.show_group(id, window, cx));
+        cx.notify();
+    }
 }
 
 impl Render for Hidden {
@@ -39,6 +45,12 @@ impl Render for Hidden {
             .hidden()
             .map(|(place, name)| (place.clone(), name.to_owned()))
             .collect();
+        let groups: Vec<(u64, String, usize)> = atlas
+            .groups()
+            .iter()
+            .filter(|group| group.is_hidden())
+            .map(|group| (group.id(), group.name().to_owned(), group.members().len()))
+            .collect();
         let muted = theme.muted_foreground;
 
         let mut list = v_flex()
@@ -48,7 +60,7 @@ impl Render for Hidden {
             .overflow_y_scroll()
             .gap_0p5()
             .text_sm();
-        if rows.is_empty() {
+        if rows.is_empty() && groups.is_empty() {
             list = list.child(
                 div()
                     .px_2()
@@ -57,7 +69,37 @@ impl Render for Hidden {
                     .child("Nothing hidden. Right click a card on the home to hide it."),
             );
         }
-        let count = rows.len();
+        let count = rows.len() + groups.len();
+        for (ix, (id, name, members)) in groups.into_iter().enumerate() {
+            let view = cx.entity().downgrade();
+            let held = match members {
+                1 => "Group · 1 card".to_owned(),
+                n => format!("Group · {n} cards"),
+            };
+            list = list.child(
+                h_flex()
+                    .id(("hidden-group", ix))
+                    .px_2()
+                    .py_1()
+                    .gap_2()
+                    .rounded_md()
+                    .hover(|style| style.bg(theme.list_hover))
+                    .child(Icon::new(Glyph::Group).small().text_color(muted))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().truncate().child(name))
+                            .child(div().truncate().text_xs().text_color(muted).child(held)),
+                    )
+                    .child(Button::ghost(("show-group", ix)).label("Show").on_click(
+                        move |_, window, cx| {
+                            view.update(cx, |this, cx| this.show_group(id, window, cx))
+                                .ok();
+                        },
+                    )),
+            );
+        }
         for (ix, (place, name)) in rows.into_iter().enumerate() {
             let (icon, at) = look(&place, &name, root.as_deref(), cx);
             let view = cx.entity().downgrade();

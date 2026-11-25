@@ -1,7 +1,7 @@
 jobs := "4"
 
 dev:
-    WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-$(ls "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$')}" \
+    WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-$(ls -t "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$')}" \
     PATH="$HOME/.local/bin:$PATH" cargo run -j {{jobs}}
 
 check:

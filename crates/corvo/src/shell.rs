@@ -1,41 +1,34 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use corvo_domain::server::Registry;
-use corvo_domain::{Share, Workbench, Workspaces, languages};
-use corvo_fs::LocalFs;
+use corvo_domain::{Chats, Share, Workbench, Workspaces, agents, languages};
+use corvo_fs::{JsonChats, LocalFs};
 use corvo_lsp::{Hub, Note};
-use corvo_ui::keys::Save;
+use corvo_ui::keys::{Dismiss, Save, ShowCode};
 use corvo_ui::language_icon::LanguageIcon;
-use corvo_ui::layout::Split;
 use corvo_ui::notice;
 use corvo_ui::statusbar::{Action, Popup, StatusBar};
 use futures::StreamExt as _;
 use gpui_kit::assets::IconName as Glyph;
-use gpui_kit::component::{ActiveTheme as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyView, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    ParentElement as _, PathPromptOptions, Render, Styled as _, Subscription, Window, div,
+    App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement as _, PathPromptOptions, Render, Styled as _, Subscription, Window,
+    div, px, relative,
 };
 use lsp_types::Position;
 
+use crate::agents::{self, Agents};
+use crate::pane::chats::{self, ChatWindow};
 use crate::pane::code::{self, Code};
+use crate::pane::dock::{self, Dock, Project};
 use crate::pane::files::{self, Files};
 use crate::pane::hidden::Hidden;
 use crate::pane::overview::{self, Overview};
 use crate::pane::stack::Stack;
-
-enum Center {
-    Code(Entity<Code>),
-}
-
-impl Center {
-    fn view(&self) -> AnyView {
-        match self {
-            Center::Code(code) => code.clone().into(),
-        }
-    }
-}
+use crate::pane::structure::{self, Structure};
 
 pub struct Shell {
     focus: FocusHandle,
@@ -43,8 +36,11 @@ pub struct Shell {
     id: u64,
     bench: Entity<Workbench>,
     hub: Entity<Hub>,
-    center: Center,
+    // The open files, over the home while shown, with the file tree and the active file's
+    // structure beside them.
+    code: Entity<Code>,
     files: Entity<Files>,
+    structure: Entity<Structure>,
     home: Entity<Overview>,
     hidden: Entity<Hidden>,
     hiding: bool,
@@ -53,6 +49,12 @@ pub struct Shell {
     tongues: HashMap<PathBuf, Vec<Share>>,
     stack: Entity<Stack>,
     stacking: bool,
+    // The chats of the workspace: the agent bar always over the content, and the chat window,
+    // which takes turns with the code over the home.
+    agents: Entity<Agents>,
+    dock: Entity<Dock>,
+    chats: Entity<ChatWindow>,
+    chatting: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -60,10 +62,15 @@ impl Shell {
     pub fn new(
         spaces: Entity<Workspaces>,
         id: u64,
-        bench: Workbench,
+        mut bench: Workbench,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // The home comes back as it was left.
+        if let Some(space) = spaces.read(cx).get(id) {
+            bench.restore(space.projects(), space.home());
+        }
+        let root = bench.atlas().root().map(Path::to_path_buf);
         let registry = Registry::default();
         let (hub, mut notes) = Hub::new(registry.clone());
         let hub = cx.new(|_| hub);
@@ -71,14 +78,63 @@ impl Shell {
         let home = cx.new(|_| Overview::new(bench.clone(), registry));
         let code = cx.new(|_| Code::new(bench.clone(), hub.clone(), home.clone()));
         let files = cx.new(|cx| Files::new(bench.clone(), window, cx));
+        let structure = cx.new(|cx| Structure::new(bench.clone(), window, cx));
         let hidden = cx.new(|_| Hidden::new(bench.clone(), home.clone()));
         let stack = cx.new(|_| Stack::default());
+
+        let (chat_list, trouble) = load_chats(id);
+        let (agent_hub, mut agent_events) = corvo_agent::Hub::new(agents());
+        let agents = cx.new(|_| Agents::new(agent_hub, chat_list));
+        let project = focused(bench.clone(), spaces.clone(), id);
+        let name = spaces
+            .read(cx)
+            .get(id)
+            .map(|space| space.name().to_owned())
+            .unwrap_or_default();
+        // The agent is started while the dev looks around, so the first chat only waits on its
+        // session.
+        let start = project(cx);
+        agents.read(cx).warm(&start);
+        let dock = cx.new(|cx| Dock::new(agents.clone(), project.clone(), window, cx));
+        let chats = cx.new(|cx| ChatWindow::new(agents.clone(), project, name.into(), window, cx));
+        if let Some(trouble) = trouble {
+            notice::error(trouble, window, cx);
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(event) = agent_events.next().await {
+                let alive = this.update(cx, |shell, cx| {
+                    shell
+                        .agents
+                        .update(cx, |agents, cx| agents.apply(event, cx));
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         let subs = vec![
+            cx.subscribe_in(&agents, window, Self::on_agents),
+            cx.subscribe_in(&dock, window, Self::on_dock),
+            cx.subscribe_in(&chats, window, Self::on_chats),
             cx.subscribe_in(&files, window, Self::on_files),
+            cx.subscribe_in(&structure, window, Self::on_structure),
             cx.subscribe_in(&code, window, Self::on_code),
             cx.subscribe_in(&home, window, Self::on_home),
             // The status bar counts what the home hides.
             cx.observe(&home, |_, _, cx| cx.notify()),
+            // The code comes over the home, or goes; it takes the place of the chat window.
+            cx.observe(&code, |this, code, cx| {
+                if code.read(cx).is_shown() && this.chatting {
+                    this.chatting = false;
+                    this.dock
+                        .update(cx, |dock, cx| dock.set_chatting(false, cx));
+                }
+                cx.notify();
+            }),
+            // The structure card shows or goes with the active file.
+            cx.observe(&structure, |_, _, cx| cx.notify()),
         ];
 
         cx.spawn_in(window, async move |this, cx| {
@@ -100,18 +156,26 @@ impl Shell {
             id,
             bench,
             hub,
-            center: Center::Code(code),
+            code,
             files,
+            structure,
             home,
             hidden,
             hiding: false,
             tongues: HashMap::new(),
             stack,
             stacking: false,
+            agents,
+            dock,
+            chats,
+            chatting: false,
             _subs: subs,
         };
-        let first = shell.linked(cx).into_iter().next();
+        let first = root.clone().or_else(|| shell.linked(cx).into_iter().next());
         shell.show(first, window, cx);
+        if root.is_some() {
+            shell.weigh(cx);
+        }
         shell
     }
 
@@ -192,11 +256,134 @@ impl Shell {
         self.hub.update(cx, |hub, _| hub.scope(linked, active));
     }
 
-    // Shows the home, with every card back in place and the graph centred.
-    fn reorganize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Center::Code(code) = &self.center;
-        code.update(cx, |code, cx| code.go_home(window, cx));
-        self.home.update(cx, |home, cx| home.reorganize(cx));
+    // Puts the code away, back to the home.
+    fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code.read(cx).is_shown() {
+            self.code.update(cx, |code, cx| code.dismiss(window, cx));
+        }
+    }
+
+    // Brings the code over the home, with the tabs left open, or puts it away.
+    fn toggle_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code.read(cx).is_shown() {
+            self.dismiss(window, cx);
+        } else {
+            self.show_code(window, cx);
+        }
+    }
+
+    // Brings the code over the home, with the tabs left open, or with none.
+    fn show_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.code.update(cx, |code, cx| code.show(window, cx));
+        // With no tab, the structure has no file to follow.
+        let active = self
+            .bench
+            .read(cx)
+            .tabs()
+            .active()
+            .map(|doc| doc.path().to_path_buf());
+        self.structure.update(cx, |structure, cx| {
+            structure.follow(active.as_deref(), window, cx)
+        });
+    }
+
+    fn on_show_code(&mut self, _: &ShowCode, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.code.read(cx).is_shown() {
+            self.show_code(window, cx);
+        }
+    }
+
+    fn on_dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code.read(cx).is_shown() {
+            self.dismiss(window, cx);
+        } else if self.chatting {
+            self.close_chat(window, cx);
+        } else {
+            cx.propagate();
+        }
+    }
+
+    // The chat window comes over the home in the code's place, or goes.
+    fn toggle_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.chatting {
+            self.close_chat(window, cx);
+            return;
+        }
+        self.dismiss(window, cx);
+        self.chatting = true;
+        self.dock.update(cx, |dock, cx| {
+            dock.set_chatting(true, cx);
+            dock.focus(window, cx);
+        });
+        self.chats.update(cx, |chats, cx| chats.shown(cx));
+        cx.notify();
+    }
+
+    fn close_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.chatting = false;
+        self.dock
+            .update(cx, |dock, cx| dock.set_chatting(false, cx));
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn on_agents(
+        &mut self,
+        _: &Entity<Agents>,
+        note: &agents::Note,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match note {
+            agents::Note::Missing { agent, hint } => {
+                let label = if hint.contains(' ') && !hint.starts_with("Node") {
+                    "Copy command"
+                } else {
+                    "Copy"
+                };
+                notice::warn_with_copy(
+                    format!("{agent} not found. Install: {hint}"),
+                    label,
+                    hint.clone(),
+                    window,
+                    cx,
+                );
+            }
+            agents::Note::Notice(message) => notice::warn(message.clone(), window, cx),
+        }
+    }
+
+    fn on_dock(
+        &mut self,
+        _: &Entity<Dock>,
+        event: &dock::Event,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            dock::Event::Chat => self.toggle_chat(window, cx),
+        }
+    }
+
+    fn on_chats(
+        &mut self,
+        _: &Entity<ChatWindow>,
+        event: &chats::Event,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            chats::Event::Close => self.close_chat(window, cx),
+        }
+    }
+
+    // Keeps how the home is now, to come back to it the same.
+    fn arrange(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let home = self.bench.read(cx).atlas().arrangement();
+        let id = self.id;
+        if let Err(err) = self.spaces.update(cx, |spaces, _| spaces.arrange(id, home)) {
+            notice::error(err.to_string(), window, cx);
+        }
     }
 
     // Asks for a folder and links it to the workspace.
@@ -253,13 +440,25 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match (event, &self.center) {
-            (files::Event::Pick(path), Center::Code(code)) => {
-                code.update(cx, |code, cx| code.open(path, window, cx));
+        match event {
+            files::Event::Pick(path) => {
+                self.code.update(cx, |code, cx| code.open(path, window, cx));
             }
-            (files::Event::Jump(path, line, column), Center::Code(code)) => {
+        }
+    }
+
+    fn on_structure(
+        &mut self,
+        _: &Entity<Structure>,
+        event: &structure::Event,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            structure::Event::Jump(path, line, column) => {
                 let at = Position::new(*line, *column);
-                code.update(cx, |code, cx| code.reveal(path, Some(at), window, cx));
+                self.code
+                    .update(cx, |code, cx| code.reveal(path, Some(at), window, cx));
             }
         }
     }
@@ -272,12 +471,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match event {
-            overview::Event::Saved(path, text) => {
-                let Center::Code(code) = &self.center;
-                code.update(cx, |code, cx| code.reload(path, text, window, cx));
-                self.files
-                    .update(cx, |files, cx| files.saved(path, window, cx));
-            }
             // The file tree follows the project open in the home.
             overview::Event::Isolated(root) => {
                 if let Some(root) = root {
@@ -287,6 +480,10 @@ impl Shell {
             }
             overview::Event::Link => self.browse(window, cx),
             overview::Event::Unlink(path) => self.unlink(path, window, cx),
+            overview::Event::Arranged => self.arrange(window, cx),
+            overview::Event::Open(path) => {
+                self.code.update(cx, |code, cx| code.open(path, window, cx));
+            }
         }
     }
 
@@ -310,21 +507,30 @@ impl Shell {
                 }
                 self.files
                     .update(cx, |files, cx| files.reveal(path, window, cx));
+                self.structure
+                    .update(cx, |structure, cx| structure.follow(Some(path), window, cx));
             }
             code::Event::Saved(path) => {
-                self.files
-                    .update(cx, |files, cx| files.saved(path, window, cx));
-                self.home
-                    .update(cx, |home, cx| home.saved(path, window, cx));
+                self.structure
+                    .update(cx, |structure, cx| structure.saved(path, window, cx));
             }
+            // The structure has no file left, and the keys go back to the window.
+            code::Event::Emptied => {
+                self.structure
+                    .update(cx, |structure, cx| structure.follow(None, window, cx));
+                self.focus.focus(window, cx);
+            }
+            // The keys go back to the window, not to the editor gone.
+            code::Event::Dismissed => self.focus.focus(window, cx),
         }
     }
 
     fn on_note(&mut self, note: Note, window: &mut Window, cx: &mut Context<Self>) {
         match note {
-            Note::Diagnostics(path, items) => match &self.center {
-                Center::Code(code) => code.update(cx, |code, cx| code.diagnose(&path, items, cx)),
-            },
+            Note::Diagnostics(path, items) => {
+                self.code
+                    .update(cx, |code, cx| code.diagnose(&path, items, cx));
+            }
             Note::Missing { server, hint } => {
                 let label = if hint.starts_with("http") {
                     "Copy link"
@@ -350,13 +556,111 @@ impl Shell {
     }
 
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
-        match &self.center {
-            Center::Code(code) => code.update(cx, |code, cx| code.save(window, cx)),
-        }
+        self.code.update(cx, |code, cx| code.save(window, cx));
     }
 }
 
 impl Shell {
+    // The code over the home, which steps back behind a dimmed layer: the tabs, and the sidebar
+    // on the right with the file tree over the active file's structure. A click on the dimmed home
+    // puts it away.
+    fn overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        // A file whose language has no outline leaves the tree the whole sidebar.
+        let card = self.structure.read(cx).is_shown(cx).then(|| {
+            div()
+                .flex_shrink_0()
+                .h(relative(0.45))
+                .p_2()
+                .child(self.structure.clone())
+        });
+        let theme = cx.theme();
+        let shell = cx.entity().downgrade();
+        let scrim = div()
+            .id("scrim")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .occlude()
+            .bg(theme.background.opacity(0.75))
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                shell.update(cx, |shell, cx| shell.dismiss(window, cx)).ok();
+            });
+        let panel = h_flex()
+            .id("code")
+            .absolute()
+            .top(px(32.))
+            .bottom(px(32.))
+            .left(px(48.))
+            .right(px(48.))
+            .occlude()
+            .overflow_hidden()
+            .rounded_lg()
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .child(div().flex_1().min_w_0().h_full().child(self.code.clone()))
+            .child(
+                v_flex()
+                    .w(px(280.))
+                    .h_full()
+                    .flex_shrink_0()
+                    .border_l_1()
+                    .border_color(theme.border)
+                    .bg(theme.sidebar)
+                    .child(div().flex_1().min_h_0().child(self.files.clone()))
+                    .children(card),
+            );
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(scrim)
+            .child(panel)
+    }
+
+    // The chat window over the home, as the code comes: the home dimmed behind, a click on it
+    // puts the window away. The agent bar stays over its foot.
+    fn chat_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme();
+        let shell = cx.entity().downgrade();
+        let scrim = div()
+            .id("chat-scrim")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .occlude()
+            .bg(theme.background.opacity(0.75))
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                shell
+                    .update(cx, |shell, cx| shell.close_chat(window, cx))
+                    .ok();
+            });
+        let panel = div()
+            .id("chats")
+            .absolute()
+            .top(px(32.))
+            .bottom(px(32.))
+            .left(px(48.))
+            .right(px(48.))
+            .occlude()
+            .overflow_hidden()
+            .rounded_lg()
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .child(self.chats.clone());
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(scrim)
+            .child(panel)
+    }
+
     // The logos of the main languages of the shown project; a click lists them all, named.
     fn stack_item(&self, shares: &[Share], cx: &mut Context<Self>) -> impl IntoElement + use<> {
         const SHOWN: usize = 3;
@@ -384,26 +688,34 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let side = v_flex()
-            .size_full()
-            .bg(cx.theme().sidebar)
-            .child(div().flex_1().min_h_0().child(self.files.clone()));
+        let shown = self.code.read(cx).is_shown();
+        let overlay = if shown {
+            Some(self.overlay(cx).into_any_element())
+        } else if self.chatting {
+            Some(self.chat_overlay(cx).into_any_element())
+        } else {
+            None
+        };
 
-        let count = self.bench.read(cx).atlas().hidden().count();
+        let count = self.bench.read(cx).atlas().hidden_count();
         let label = match count {
             0 => "Nothing hidden".to_owned(),
             n => format!("{n} hidden"),
         };
+        let tip = if shown {
+            "Put the code away"
+        } else {
+            "Open the code"
+        };
         let shell = cx.entity().downgrade();
-        let tidy = cx.entity().downgrade();
+        let coder = cx.entity().downgrade();
         let mut status = StatusBar::new()
             .item(
-                Action::new("reorganize", Glyph::LayoutDashboard, "Reorganize the graph").on_click(
-                    move |window, cx| {
-                        tidy.update(cx, |shell, cx| shell.reorganize(window, cx))
-                            .ok();
-                    },
-                ),
+                Action::new("code", Glyph::Code, tip).on_click(move |window, cx| {
+                    coder
+                        .update(cx, |shell, cx| shell.toggle_code(window, cx))
+                        .ok();
+                }),
             )
             .item(
                 Popup::new("hidden", label, self.hidden.clone())
@@ -434,13 +746,53 @@ impl Render for Shell {
         v_flex()
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::save))
+            .on_action(cx.listener(Self::on_show_code))
+            .on_action(cx.listener(Self::on_dismiss))
             .size_full()
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(Split::new(self.center.view(), side)),
+                    .child(self.home.clone())
+                    .children(overlay)
+                    .child(self.dock.clone()),
             )
             .child(status)
     }
+}
+
+// The chats kept for the workspace; ones that do not read leave it with none, and say why.
+fn load_chats(workspace: u64) -> (Chats, Option<String>) {
+    let store = || {
+        JsonChats::config()
+            .unwrap_or_else(|_| JsonChats::new(std::env::temp_dir().join("corvo-chats")))
+    };
+    match Chats::load(workspace, Box::new(store())) {
+        Ok(chats) => (chats, None),
+        Err(err) => (
+            Chats::empty(workspace, Box::new(store())),
+            Some(format!("chats: {err}")),
+        ),
+    }
+}
+
+// The folder a new chat works in: the project isolated in the home, the one the active tab
+// belongs to, or the first one of the workspace.
+fn focused(bench: Entity<Workbench>, spaces: Entity<Workspaces>, id: u64) -> Project {
+    Rc::new(move |cx: &App| {
+        let open = bench.read(cx);
+        open.atlas()
+            .root()
+            .map(Path::to_path_buf)
+            .or_else(|| open.project().map(Path::to_path_buf))
+            .or_else(|| {
+                spaces
+                    .read(cx)
+                    .get(id)
+                    .and_then(|space| space.projects().first().cloned())
+            })
+            .or_else(std::env::home_dir)
+            .unwrap_or_else(std::env::temp_dir)
+    })
 }
