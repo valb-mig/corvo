@@ -7,6 +7,7 @@ edition.workspace = true
 corvo-domain.workspace = true
 corvo-fs.workspace = true
 corvo-lsp.workspace = true
+corvo-syntax.workspace = true
 corvo-ui.workspace = true
 gpui-kit.workspace = true
 anyhow.workspace = true

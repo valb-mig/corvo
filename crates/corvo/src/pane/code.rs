@@ -10,14 +10,16 @@ use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, EventEmitter, IntoElement, ParentElement as _,
     Render, Styled as _, Subscription, Window, div,
 };
-use lsp_types::{Diagnostic, Position};
+use lsp_types::{Diagnostic, Position, TextDocumentContentChangeEvent};
 
 use crate::assist::Assist;
+use crate::pane::overview::Overview;
 
 const IDLE: Duration = Duration::from_secs(60);
 
 pub enum Event {
     Active(PathBuf),
+    Saved(PathBuf),
 }
 
 enum View {
@@ -29,6 +31,8 @@ enum View {
 pub struct Code {
     bench: Entity<Workbench>,
     hub: Entity<Hub>,
+    home: Entity<Overview>,
+    at_home: bool,
     views: HashMap<PathBuf, View>,
     texts: HashMap<PathBuf, editor::Rope>,
     subs: HashMap<PathBuf, Vec<Subscription>>,
@@ -37,10 +41,12 @@ pub struct Code {
 impl EventEmitter<Event> for Code {}
 
 impl Code {
-    pub fn new(bench: Entity<Workbench>, hub: Entity<Hub>) -> Self {
+    pub fn new(bench: Entity<Workbench>, hub: Entity<Hub>, home: Entity<Overview>) -> Self {
         Self {
             bench,
             hub,
+            home,
+            at_home: true,
             views: HashMap::new(),
             texts: HashMap::new(),
             subs: HashMap::new(),
@@ -48,6 +54,7 @@ impl Code {
     }
 
     pub fn open(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.at_home = false;
         match self.bench.update(cx, |bench, _| bench.open(path)) {
             Ok(Some(content)) => self.mount(path, content, window, cx),
             Ok(None) => {}
@@ -59,14 +66,51 @@ impl Code {
     }
 
     pub fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.homing(cx) {
+            self.home.update(cx, |home, cx| home.save(window, cx));
+            return;
+        }
         let Some((path, state)) = self.active(cx) else {
             return;
         };
         let text = state.read(cx).value();
         match self.bench.update(cx, |bench, _| bench.save(&path, &text)) {
-            Ok(()) => self.hub.read(cx).save(&path),
+            Ok(()) => {
+                self.hub.read(cx).save(&path);
+                cx.emit(Event::Saved(path));
+            }
             Err(err) => notice::error(format!("{}: {err}", path.display()), window, cx),
         }
+        cx.notify();
+    }
+
+    // The file was written from elsewhere (the home's code panel): an open, clean tab of it takes
+    // the new text, and its language server hears the whole of it.
+    pub fn reload(&mut self, path: &Path, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(View::Text(state)) = self.views.get(path) else {
+            return;
+        };
+        if self
+            .bench
+            .read(cx)
+            .tabs()
+            .get(path)
+            .is_some_and(Doc::is_dirty)
+        {
+            return;
+        }
+        state.update(cx, |state, cx| state.set_value(text.to_owned(), window, cx));
+        let rope = state.read(cx).text().clone();
+        self.texts.insert(path.to_path_buf(), rope);
+        let whole = TextDocumentContentChangeEvent {
+            range: None,
+            range_length: None,
+            text: text.to_owned(),
+        };
+        self.hub.update(cx, |hub, _| {
+            hub.change(path, vec![whole], || text.to_owned());
+            hub.save(path);
+        });
         cx.notify();
     }
 
@@ -174,10 +218,22 @@ impl Code {
         let Some(path) = self.path_at(ix, cx) else {
             return;
         };
+        self.at_home = false;
         self.bench.update(cx, |bench, _| bench.focus(&path));
         self.focus(window, cx);
         self.announce(cx);
         cx.notify();
+    }
+
+    pub fn go_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.at_home = true;
+        self.home.update(cx, |home, cx| home.refresh(window, cx));
+        cx.notify();
+    }
+
+    // Home shows when picked, and whenever there is no tab to show.
+    fn homing(&self, cx: &Context<Self>) -> bool {
+        self.at_home || self.bench.read(cx).tabs().active().is_none()
     }
 
     fn close(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -255,10 +311,16 @@ impl Render for Code {
             })
             .collect();
         let active = tabs.active_ix();
-        let body = self.body(cx);
+        let homing = self.homing(cx);
+        let body = if homing {
+            Some(self.home.clone().into_any_element())
+        } else {
+            self.body(cx)
+        };
 
         let pick = cx.entity().downgrade();
         let close = pick.clone();
+        let home = pick.clone();
 
         div()
             .flex()
@@ -267,6 +329,9 @@ impl Render for Code {
             .child(
                 tab::Bar::new("tabs", items)
                     .active(active)
+                    .home(homing, move |window, cx| {
+                        home.update(cx, |this, cx| this.go_home(window, cx)).ok();
+                    })
                     .on_pick(move |ix, window, cx| {
                         pick.update(cx, |this, cx| this.pick(ix, window, cx)).ok();
                     })

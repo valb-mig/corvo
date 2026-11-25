@@ -1,5 +1,6 @@
 use corvo_domain::{Doc, Workbench, Workspaces};
 use corvo_fs::LocalFs;
+use corvo_syntax::TreeSitter;
 use corvo_ui::button::Button;
 use corvo_ui::notice;
 use corvo_ui::titlebar::TitleBar;
@@ -49,7 +50,7 @@ impl Frame {
 
     fn enter(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let spaces = self.spaces.clone();
-        let bench = Workbench::new(Box::new(LocalFs));
+        let bench = Workbench::new(Box::new(LocalFs), Box::new(TreeSitter));
         let shell = cx.new(|cx| Shell::new(spaces, id, bench, window, cx));
         self.stage = Stage::Shell { id, shell };
         self._subs.clear();

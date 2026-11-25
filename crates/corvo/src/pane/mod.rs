@@ -1,3 +1,6 @@
 pub mod code;
+pub mod detail;
 pub mod files;
-pub mod projects;
+pub mod hidden;
+pub mod overview;
+pub mod stack;
