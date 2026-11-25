@@ -1052,6 +1052,7 @@ dependencies = [
  "corvo-domain",
  "corvo-fs",
  "corvo-lsp",
+ "corvo-syntax",
  "corvo-ui",
  "futures",
  "gpui-kit",
@@ -1084,6 +1085,21 @@ dependencies = [
  "lsp-types",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "corvo-syntax"
+version = "0.1.0"
+dependencies = [
+ "corvo-domain",
+ "tree-sitter",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-kotlin-sg",
+ "tree-sitter-php",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
 ]
 
 [[package]]

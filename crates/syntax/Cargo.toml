@@ -1,0 +1,15 @@
+[package]
+name = "corvo-syntax"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+corvo-domain.workspace = true
+tree-sitter.workspace = true
+tree-sitter-java.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-kotlin-sg.workspace = true
+tree-sitter-php.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-typescript.workspace = true

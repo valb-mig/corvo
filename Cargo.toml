@@ -12,6 +12,7 @@ corvo-domain = { path = "crates/domain" }
 corvo-fs = { path = "crates/fs" }
 corvo-ui = { path = "crates/ui" }
 corvo-lsp = { path = "crates/lsp" }
+corvo-syntax = { path = "crates/syntax" }
 gpui-kit = { version = "0.10", default-features = false }
 ignore = "0.4"
 anyhow = "1"
@@ -22,6 +23,14 @@ lsp-types = "0.97"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
+tree-sitter = "0.26"
+tree-sitter-java = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-kotlin-sg = "0.4"
+tree-sitter-php = "0.24"
+tree-sitter-python = "0.23"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
 
 [profile.dev.package."*"]
 opt-level = 3
