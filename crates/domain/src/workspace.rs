@@ -1,13 +1,16 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::Arrangement;
 use crate::port::Store;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Workspace {
     id: u64,
     name: String,
     projects: Vec<PathBuf>,
+    // How its home was left.
+    home: Arrangement,
 }
 
 impl Workspace {
@@ -16,7 +19,13 @@ impl Workspace {
             id,
             name: name.into(),
             projects,
+            home: Arrangement::default(),
         }
+    }
+
+    pub fn arranged(mut self, home: Arrangement) -> Self {
+        self.home = home;
+        self
     }
 
     pub fn id(&self) -> u64 {
@@ -29,6 +38,10 @@ impl Workspace {
 
     pub fn projects(&self) -> &[PathBuf] {
         &self.projects
+    }
+
+    pub fn home(&self) -> &Arrangement {
+        &self.home
     }
 
     pub fn owner(&self, file: &Path) -> Option<&Path> {
@@ -96,6 +109,18 @@ impl Workspaces {
         if let Some(item) = self.item_mut(id) {
             item.projects.retain(|known| known != project);
         }
+        self.save()
+    }
+
+    // Keeps how the home was left, saving only when it changed.
+    pub fn arrange(&mut self, id: u64, home: Arrangement) -> io::Result<()> {
+        let Some(item) = self.item_mut(id) else {
+            return Ok(());
+        };
+        if item.home == home {
+            return Ok(());
+        }
+        item.home = home;
         self.save()
     }
 

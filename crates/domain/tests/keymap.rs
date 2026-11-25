@@ -11,6 +11,17 @@ fn save_is_global_by_default() {
 }
 
 #[test]
+fn ctrl_shift_e_shows_the_code_from_anywhere() {
+    let keymap = Keymap::default();
+    let show = keymap
+        .bindings()
+        .iter()
+        .find(|b| b.chord() == "ctrl-shift-e");
+    assert_eq!(show.map(Binding::command), Some(Command::ShowCode));
+    assert_eq!(show.map(Binding::scope), Some(Scope::Global));
+}
+
+#[test]
 fn bind_replaces_same_chord_in_same_scope() {
     let mut keymap = Keymap::default();
     keymap.bind(Binding::new("ctrl-z", Command::Redo, Scope::Editor));

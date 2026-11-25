@@ -3,7 +3,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::port::{Depth, Fs, Syntax};
-use crate::{Atlas, Content, Lang, Mention, Node, Place, Symbol, Tabs, Tree, excerpt};
+use crate::{
+    Arrangement, Atlas, Content, Lang, Mark, Mention, Node, Place, Symbol, Tabs, Tree, excerpt,
+};
 
 pub struct Workbench {
     fs: Box<dyn Fs>,
@@ -40,6 +42,11 @@ impl Workbench {
 
     pub fn atlas(&self) -> &Atlas {
         &self.atlas
+    }
+
+    // For what changes only how the home is arranged, with nothing to read.
+    pub fn atlas_mut(&mut self) -> &mut Atlas {
+        &mut self.atlas
     }
 
     pub fn show(&mut self, project: Option<&Path>) -> io::Result<()> {
@@ -149,6 +156,52 @@ impl Workbench {
             }
         }
         failed.map_or(Ok(()), Err)
+    }
+
+    // Brings the home back as it was left, with what can still be read; the rest doesn't come
+    // back.
+    pub fn restore(&mut self, projects: &[PathBuf], left: &Arrangement) {
+        self.atlas.chart(projects);
+        let root = left
+            .root
+            .as_deref()
+            .filter(|root| projects.iter().any(|project| project == root));
+        if let Some(root) = root
+            && self.survey(root).is_ok()
+        {
+            self.atlas.isolate(Some(root));
+            for node in left
+                .open
+                .iter()
+                .filter(|node| node.path().starts_with(root))
+            {
+                if self.load_atlas(node).is_ok() {
+                    self.atlas.open(node.clone());
+                }
+            }
+            for (file, trail) in &left.dives {
+                if let Some(at) = self.atlas.find(file, trail) {
+                    self.atlas.dive(file, &at);
+                }
+            }
+        }
+        for (mark, name) in &left.hidden {
+            let place = match mark {
+                Mark::Node(path) => Some(Place::Node(path.clone())),
+                Mark::Symbol(file, trail) => {
+                    // The file may be closed: its outline is read to find the symbol.
+                    self.load_atlas(&Node::file(file)).ok();
+                    self.atlas
+                        .find(file, trail)
+                        .map(|at| Place::Symbol(file.clone(), at))
+                }
+            };
+            if let Some(place) = place {
+                self.atlas.hide(place, name);
+            }
+        }
+        self.atlas
+            .rearrange(left.nudges.clone(), left.groups.clone());
     }
 
     pub fn rechart(&mut self) -> io::Result<()> {

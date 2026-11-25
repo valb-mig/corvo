@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use corvo_domain::port::Store;
-use corvo_domain::{Workspace, Workspaces, owner};
+use corvo_domain::{Arrangement, Workspace, Workspaces, owner};
 
 #[derive(Clone, Default)]
 struct Memory {
@@ -81,6 +81,22 @@ fn reloads_what_was_saved() {
     let again = Workspaces::load(Box::new(store)).unwrap();
 
     assert_eq!(again.items(), spaces.items());
+}
+
+#[test]
+fn arranging_saves_only_what_changed() {
+    let store = Memory::default();
+    let mut spaces = Workspaces::load(Box::new(store.clone())).unwrap();
+    let id = spaces.add("w").unwrap();
+    let mut home = Arrangement::default();
+    home.nudges.insert("/p".to_owned(), (1., 2.));
+
+    spaces.arrange(id, home.clone()).unwrap();
+    store.saved.borrow_mut().clear();
+    spaces.arrange(id, home.clone()).unwrap();
+
+    assert!(store.saved.borrow().is_empty());
+    assert_eq!(spaces.get(id).unwrap().home(), &home);
 }
 
 #[test]

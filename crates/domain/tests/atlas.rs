@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use corvo_domain::server::Registry;
-use corvo_domain::{Atlas, Node, Place, Symbol, SymbolKind, stack};
+use corvo_domain::{Atlas, Mark, Node, Place, Symbol, SymbolKind, stack};
 
 fn atlas() -> Atlas {
     let mut atlas = Atlas::default();
@@ -149,4 +149,110 @@ fn showing_brings_one_card_or_all_back() {
 
     atlas.show_all();
     assert_eq!(atlas.hidden().count(), 0);
+}
+
+fn keys(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| (*name).to_owned()).collect()
+}
+
+#[test]
+fn a_trail_names_the_way_to_a_symbol_and_counts_repeated_names() {
+    let mut atlas = atlas();
+    let twice = Path::new("/p/twice.rs");
+    atlas.trace(
+        twice,
+        vec![
+            Symbol::new("new", SymbolKind::Function, 0, 3),
+            Symbol::new("new", SymbolKind::Function, 4, 3),
+        ],
+    );
+    let lib = Path::new("/p/src/lib.rs");
+
+    assert_eq!(atlas.trail(lib, &[0, 1]).unwrap(), ["Blobs", "get"]);
+    assert_eq!(atlas.trail(twice, &[1]).unwrap(), ["new~1"]);
+    assert_eq!(atlas.find(twice, &keys(&["new~1"])), Some(vec![1]));
+    assert_eq!(atlas.find(lib, &keys(&["Blobs", "gone"])), None);
+}
+
+#[test]
+fn grouping_takes_cards_out_of_the_groups_they_were_in() {
+    let mut atlas = atlas();
+    let first = atlas.group(keys(&["a", "b"])).unwrap();
+    let second = atlas.group(keys(&["b", "c"])).unwrap();
+
+    assert_ne!(first, second);
+    assert_eq!(atlas.group_of("a").unwrap().members(), ["a"]);
+    assert_eq!(atlas.group_of("b").unwrap().id(), second);
+    assert_eq!(
+        atlas.group_of("c").unwrap().name(),
+        format!("Group {second}")
+    );
+
+    atlas.leave("a");
+    assert!(atlas.group_of("a").is_none());
+    assert_eq!(atlas.groups().len(), 1);
+    assert!(atlas.group(Vec::new()).is_none());
+}
+
+#[test]
+fn a_blank_name_leaves_the_group_as_it_was() {
+    let mut atlas = atlas();
+    let id = atlas.group(keys(&["a"])).unwrap();
+
+    atlas.rename(id, "  Storage ");
+    atlas.rename(id, "   ");
+
+    assert_eq!(atlas.groups()[0].name(), "Storage");
+}
+
+#[test]
+fn a_hidden_group_veils_its_cards_until_shown() {
+    let mut atlas = atlas();
+    let id = atlas.group(keys(&["a", "b"])).unwrap();
+    atlas.hide(Place::Node(PathBuf::from("/p/docs")), "docs");
+
+    atlas.hide_group(id);
+    assert!(atlas.is_veiled("a") && !atlas.is_veiled("c"));
+    assert_eq!(atlas.hidden_count(), 2);
+
+    atlas.show_all();
+    assert!(!atlas.is_veiled("a"));
+    assert_eq!(atlas.hidden_count(), 0);
+}
+
+#[test]
+fn untangling_keeps_the_groups() {
+    let mut atlas = atlas();
+    atlas.group(keys(&["a"]));
+    atlas.nudge("a", (10., -4.));
+
+    atlas.untangle();
+
+    assert!(atlas.nudges().is_empty());
+    assert_eq!(atlas.groups().len(), 1);
+}
+
+#[test]
+fn the_arrangement_keeps_symbols_by_their_trail() {
+    let mut atlas = atlas();
+    let lib = Path::new("/p/src/lib.rs");
+    atlas.open(Node::dir("/p/src"));
+    atlas.open(Node::file(lib));
+    atlas.dive(lib, &[0]);
+    atlas.hide(Place::Symbol(lib.to_path_buf(), vec![1]), "open");
+    atlas.nudge("/p/src", (5., 5.));
+
+    let kept = atlas.arrangement();
+
+    assert_eq!(kept.root.as_deref(), Some(Path::new("/p")));
+    assert_eq!(kept.open.len(), 2);
+    assert_eq!(kept.dives, [(lib.to_path_buf(), keys(&["Blobs"]))]);
+    assert_eq!(
+        kept.hidden,
+        [(
+            Mark::Symbol(lib.to_path_buf(), keys(&["open"])),
+            "open".to_owned()
+        )]
+    );
+    assert_eq!(kept.nudges["/p/src"], (5., 5.));
 }

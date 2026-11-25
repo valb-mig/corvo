@@ -5,4 +5,8 @@ pub enum Command {
     Redo,
     Complete,
     Definition,
+    // Brings the code over the home.
+    ShowCode,
+    // Puts the code away, back to the home.
+    Dismiss,
 }

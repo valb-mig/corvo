@@ -80,3 +80,40 @@ impl Symbol {
         &self.children
     }
 }
+
+// The names that lead through `symbols` to the one at `at`, which hold while lines move. A name
+// that symbols before it under the same parent share takes `~n`, n being how many of them.
+pub fn trail(symbols: &[Symbol], at: &[usize]) -> Option<Vec<String>> {
+    let mut symbols = symbols;
+    let mut trail = Vec::with_capacity(at.len());
+    for &ix in at {
+        let symbol = symbols.get(ix)?;
+        trail.push(step(symbols, ix));
+        symbols = symbol.nested();
+    }
+    Some(trail)
+}
+
+// The indexes a trail leads to through `symbols`; none when a name is no longer there.
+pub fn find(symbols: &[Symbol], trail: &[String]) -> Option<Vec<usize>> {
+    let mut symbols = symbols;
+    let mut at = Vec::with_capacity(trail.len());
+    for name in trail {
+        let ix = (0..symbols.len()).find(|&ix| step(symbols, ix) == *name)?;
+        at.push(ix);
+        symbols = symbols[ix].nested();
+    }
+    Some(at)
+}
+
+fn step(siblings: &[Symbol], ix: usize) -> String {
+    let name = siblings[ix].name();
+    match siblings[..ix]
+        .iter()
+        .filter(|sibling| sibling.name() == name)
+        .count()
+    {
+        0 => name.to_owned(),
+        n => format!("{name}~{n}"),
+    }
+}

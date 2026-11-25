@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use corvo_domain::port::{Depth, Fs, Syntax};
-use corvo_domain::{Content, Lang, Node, Symbol, SymbolKind, Workbench};
+use corvo_domain::{Arrangement, Content, Lang, Mark, Node, Place, Symbol, SymbolKind, Workbench};
 
 #[derive(Clone, Default)]
 struct Memory {
@@ -356,4 +356,51 @@ fn mentions_stay_inside_the_given_lines() {
 
     let all = bench.mentions(main, "n", None).unwrap();
     assert_eq!(all.len(), 4);
+}
+
+#[test]
+fn restore_brings_the_home_back_after_lines_move() {
+    let fs = project();
+    fs.files
+        .borrow_mut()
+        .insert("/p/src/lib.rs".into(), "fn open()\nfn close()".into());
+    let lib = PathBuf::from("/p/src/lib.rs");
+    let left = Arrangement {
+        root: Some(PathBuf::from("/p")),
+        open: vec![Node::dir("/p/src"), Node::file(&lib)],
+        dives: vec![(lib.clone(), vec!["close".to_owned()])],
+        hidden: vec![(
+            Mark::Symbol(lib.clone(), vec!["open".to_owned()]),
+            "open".to_owned(),
+        )],
+        ..Arrangement::default()
+    };
+    // A line came in above both functions since the home was left.
+    fs.files
+        .borrow_mut()
+        .insert(lib.clone(), "fn close()\n\nfn open()".into());
+    let mut bench = Workbench::new(Box::new(fs), Box::new(Lines));
+
+    bench.restore(&[PathBuf::from("/p")], &left);
+
+    let atlas = bench.atlas();
+    assert_eq!(atlas.root(), Some(Path::new("/p")));
+    assert!(atlas.is_open(&lib));
+    assert!(atlas.is_dived(&lib, &[0]));
+    assert!(atlas.is_hidden(&Place::Symbol(lib.clone(), vec![1])));
+}
+
+#[test]
+fn restore_leaves_out_a_project_no_longer_linked() {
+    let left = Arrangement {
+        root: Some(PathBuf::from("/gone")),
+        open: vec![Node::dir("/gone/src")],
+        ..Arrangement::default()
+    };
+    let mut bench = Workbench::new(Box::new(project()), Box::new(Lines));
+
+    bench.restore(&[PathBuf::from("/p")], &left);
+
+    assert!(bench.atlas().root().is_none());
+    assert_eq!(bench.atlas().opened().count(), 0);
 }

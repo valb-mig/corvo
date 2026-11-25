@@ -35,6 +35,8 @@ impl Default for Keymap {
             Binding::new("ctrl-y", Command::Redo, Scope::Editor),
             Binding::new("ctrl-space", Command::Complete, Scope::Editor),
             Binding::new("f12", Command::Definition, Scope::Editor),
+            Binding::new("ctrl-shift-e", Command::ShowCode, Scope::Global),
+            Binding::new("escape", Command::Dismiss, Scope::Global),
         ])
     }
 }
