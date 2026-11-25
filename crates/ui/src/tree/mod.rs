@@ -1,9 +1,15 @@
+use corvo_domain::SymbolKind;
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::tree::{Tree, tree};
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
     App, Entity, IntoElement, ParentElement as _, RenderOnce, Styled as _, Window, div, px,
 };
+
+use crate::file_icon::{FileIcon, FolderIcon};
+use crate::symbol_icon::SymbolIcon;
+
+const ICON: gpui_kit::Pixels = px(16.);
 
 pub use gpui_kit::component::tree::{
     TreeEntry as Entry, TreeEvent as Event, TreeItem as Item, TreeState as State,
@@ -41,27 +47,24 @@ pub struct Row;
 
 impl Row {
     pub fn dir(entry: &Entry) -> ListItem {
-        let icon = if entry.is_expanded() {
-            IconName::FolderOpen
-        } else {
-            IconName::Folder
-        };
+        let icon = FolderIcon::new(entry.item().label.clone())
+            .open(entry.is_expanded())
+            .size(ICON);
         Self::build(entry, icon)
     }
 
     pub fn file(entry: &Entry) -> ListItem {
-        Self::build(entry, IconName::File)
+        Self::build(entry, FileIcon::new(entry.item().label.clone()).size(ICON))
     }
 
-    fn build(entry: &Entry, icon: IconName) -> ListItem {
+    pub fn symbol(entry: &Entry, kind: SymbolKind) -> ListItem {
+        Self::build(entry, SymbolIcon::new(kind).size(ICON))
+    }
+
+    fn build(entry: &Entry, icon: impl IntoElement) -> ListItem {
         let item = entry.item();
         ListItem::new(item.id.clone())
             .pl(px(12.) * entry.depth() + px(8.))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(Icon::new(icon).small())
-                    .child(item.label.clone()),
-            )
+            .child(h_flex().gap_2().child(icon).child(item.label.clone()))
     }
 }

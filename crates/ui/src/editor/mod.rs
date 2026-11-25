@@ -33,6 +33,17 @@ pub fn state(
     state
 }
 
+// A piece of a file on its own: no line numbers or folding, since its lines start mid-file.
+pub fn snippet(lang: Lang, text: String, window: &mut Window, cx: &mut Context<State>) -> State {
+    let mut state = EditorState::new(window, cx)
+        .language(name(lang))
+        .line_number(false)
+        .folding(false)
+        .default_value(text);
+    state.set_soft_wrap(false, window, cx);
+    state
+}
+
 pub fn view(state: &Entity<State>) -> impl IntoElement + use<> {
     Editor::new(state).size_full().bordered(false)
 }
