@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use corvo_domain::Workspace;
 use corvo_domain::port::Store;
+use corvo_domain::{Arrangement, Group, Mark, Node, Workspace};
 use corvo_fs::JsonStore;
 
 fn scratch(name: &str) -> PathBuf {
@@ -41,5 +41,54 @@ fn corrupt_file_is_an_error() {
 
     assert!(JsonStore::new(&path).load().is_err());
     assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn keeps_how_the_home_was_left() {
+    let dir = scratch("home");
+    let store = JsonStore::new(dir.join("workspaces.json"));
+    let lib = PathBuf::from("/p/src/lib.rs");
+    let mut home = Arrangement {
+        root: Some(PathBuf::from("/p")),
+        open: vec![Node::dir("/p/src"), Node::file(&lib)],
+        dives: vec![(lib.clone(), vec!["Blobs".to_owned()])],
+        hidden: vec![
+            (Mark::Node(PathBuf::from("/p/docs")), "docs".to_owned()),
+            (
+                Mark::Symbol(lib.clone(), vec!["open".to_owned()]),
+                "open".to_owned(),
+            ),
+        ],
+        groups: vec![
+            Group::new(1, "Storage", vec!["/p/src".to_owned()])
+                .collapsed(true)
+                .hidden(true),
+        ],
+        ..Arrangement::default()
+    };
+    home.nudges.insert("/p/src".to_owned(), (12.5, -3.));
+    let items = vec![Workspace::new(1, "work", vec![PathBuf::from("/p")]).arranged(home)];
+
+    store.save(&items).unwrap();
+
+    assert_eq!(store.load().unwrap(), items);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_file_from_before_homes_were_kept_loads() {
+    let dir = scratch("legacy");
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("workspaces.json");
+    fs::write(
+        &path,
+        r#"{ "workspaces": [{ "id": 1, "name": "w", "projects": ["/p"] }] }"#,
+    )
+    .unwrap();
+
+    let items = JsonStore::new(&path).load().unwrap();
+
+    assert_eq!(items, [Workspace::new(1, "w", vec![PathBuf::from("/p")])]);
     fs::remove_dir_all(dir).unwrap();
 }

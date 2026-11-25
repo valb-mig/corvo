@@ -1,3 +1,4 @@
+mod chats;
 mod store;
 
 use std::io;
@@ -7,6 +8,7 @@ use corvo_domain::Node;
 use corvo_domain::port::Fs;
 use ignore::WalkBuilder;
 
+pub use chats::JsonChats;
 pub use store::JsonStore;
 
 #[derive(Clone, Copy, Debug, Default)]
