@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::panic;
 use std::rc::Rc;
+use std::time::Instant;
 
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
@@ -15,13 +16,17 @@ use gpui_kit::{
     prelude::FluentBuilder as _, px,
 };
 
+use crate::motion::{Glides, Pan, Sight};
+
 // Cards as a tree read left to right: an open card holds its cards in the next column, with a
 // curve to each, and any number of cards can be open at once. A column can come in blocks, a
 // little apart, and end in a chip; a card can stand for a pile, with sheets under it, the wheel
 // over it turning through what it holds. A card can drop a panel down from
 // under its header; its column widens to hold it. Cards can be picked, with Ctrl or Shift on a
 // click or a box drawn with Shift, to group or hide them together; a group is a frame around its
-// cards, or one card in their place when collapsed.
+// cards, or one card in their place when collapsed. Nothing jumps: cards glide to where the
+// layout puts them, new ones coming out of the card holding them, and the zoom bar glides the
+// camera; the wheel and the mouse move it at once.
 
 pub const WIDTH: f32 = 232.;
 pub const HEIGHT: f32 = 52.;
@@ -493,6 +498,11 @@ struct Lens {
     fit: bool,
     // The card the wheel is turning, and how far it went short of a turn.
     spin: Option<(SharedString, f32)>,
+    // The cards on their way to where the layout puts them, and the camera on its way somewhere.
+    glides: Glides<SharedString>,
+    pan: Option<Pan>,
+    // Motion is turned down: nothing glides.
+    still: bool,
 }
 
 #[derive(Clone)]
@@ -521,7 +531,45 @@ impl Default for Lens {
             extent: (0., 0.),
             fit: false,
             spin: None,
+            glides: Glides::default(),
+            pan: None,
+            still: false,
         }
+    }
+}
+
+impl Lens {
+    fn middle(&self) -> (f32, f32) {
+        let size = self.bounds.size;
+        (f32::from(size.width) / 2., f32::from(size.height) / 2.)
+    }
+
+    fn sight(&self) -> Sight {
+        Sight {
+            zoom: self.zoom,
+            center: View::new(self.zoom).under(self.middle(), self.offset),
+        }
+    }
+
+    // Looks from the given sight at once.
+    fn look(&mut self, sight: Sight) {
+        self.zoom = sight.zoom;
+        self.offset = View::new(sight.zoom).offset(sight.center, self.middle());
+    }
+
+    // Heads for the given sight, gliding from where it looks now unless motion is turned down.
+    fn head(&mut self, to: Sight) {
+        if self.still {
+            self.pan = None;
+            self.look(to);
+            return;
+        }
+        self.pan = Some(Pan::new(self.sight(), to, Instant::now()));
+    }
+
+    // Where it is heading, or where it looks from when going nowhere.
+    fn aim(&self) -> Sight {
+        self.pan.map_or_else(|| self.sight(), |pan| pan.to())
     }
 }
 
@@ -534,28 +582,72 @@ impl Camera {
         self.lens.borrow().offset
     }
 
+    // The wheel and the mouse move the camera at once, stopping any glide.
     fn move_by(&self, (dx, dy): (f32, f32)) {
         let mut lens = self.lens.borrow_mut();
+        lens.pan = None;
         lens.offset = (lens.offset.0 + dx, lens.offset.1 + dy);
     }
 
-    // Zooms keeping the graph point under the viewport point `at` where it is.
+    // Zooms at once keeping the graph point under the viewport point `at` where it is.
     fn zoom_to(&self, zoom: f32, at: (f32, f32)) {
-        let before = View::new(self.zoom());
-        let zoom = zoom.clamp(ZOOM_MIN, ZOOM_MAX);
-        let after = View::new(zoom);
-        let p = before.under(at, self.offset());
-        let offset = after.offset(p, at);
         let mut lens = self.lens.borrow_mut();
+        lens.pan = None;
+        let p = View::new(lens.zoom).under(at, lens.offset);
+        let zoom = zoom.clamp(ZOOM_MIN, ZOOM_MAX);
         lens.zoom = zoom;
-        lens.offset = offset;
+        lens.offset = View::new(zoom).offset(p, at);
     }
 
-    // Back to where it started: zoom 1, nothing moved.
+    // Glides closer or further by `by`, the middle of the viewport kept; asked again on the way,
+    // it goes on from where it was heading.
+    fn glide_zoom(&self, by: f32) {
+        let mut lens = self.lens.borrow_mut();
+        let aim = lens.aim();
+        let zoom = (aim.zoom * by).clamp(ZOOM_MIN, ZOOM_MAX);
+        lens.head(Sight { zoom, ..aim });
+    }
+
+    // Glides back to where it started: zoom 1, nothing moved.
     fn reset(&self) {
         let mut lens = self.lens.borrow_mut();
-        lens.zoom = 1.;
-        lens.offset = (0., 0.);
+        let center = lens.middle();
+        lens.head(Sight { zoom: 1., center });
+    }
+
+    // Moves the camera along its glide; true while it is on its way.
+    fn step(&self, now: Instant, still: bool) -> bool {
+        let mut lens = self.lens.borrow_mut();
+        lens.still = still;
+        let Some(pan) = lens.pan else {
+            return false;
+        };
+        if still || pan.done(now) {
+            lens.look(pan.to());
+            lens.pan = None;
+            return false;
+        }
+        lens.look(pan.at(now));
+        true
+    }
+
+    // Where a card in sight shows now on its way to `to`, and how opaque; see `Glides::place`.
+    fn place(
+        &self,
+        key: &SharedString,
+        to: (f32, f32),
+        from: Option<(f32, f32)>,
+        now: Instant,
+        snap: bool,
+    ) -> ((f32, f32), f32) {
+        let mut lens = self.lens.borrow_mut();
+        let snap = snap || lens.still;
+        lens.glides.place(key, to, from, now, snap)
+    }
+
+    // Every card in sight was placed: true while one is still on its way.
+    fn settle(&self, now: Instant) -> bool {
+        self.lens.borrow_mut().glides.settle(now)
     }
 
     // A window point in the viewport.
@@ -609,6 +701,7 @@ impl Camera {
     // card goes along when the mouse moves, with the others picked when it is one of them.
     fn grab(&self, id: &SharedString, at: Point<Pixels>, toggle: bool) {
         let mut lens = self.lens.borrow_mut();
+        lens.pan = None;
         lens.spent = false;
         if toggle {
             match lens.picked.iter().position(|picked| picked == id) {
@@ -651,6 +744,7 @@ impl Camera {
                 )
             })
             .collect();
+        lens.pan = None;
         lens.spent = false;
         lens.drag = Some(Drag::Cards(at, from, (0., 0.)));
     }
@@ -659,6 +753,7 @@ impl Camera {
     fn press(&self, at: Point<Pixels>, pick: bool) {
         let p = self.under(at);
         let mut lens = self.lens.borrow_mut();
+        lens.pan = None;
         lens.spent = false;
         lens.drag = Some(if pick {
             lens.picked.clear();
@@ -747,7 +842,8 @@ impl Camera {
         self.lens.borrow_mut().fit = true;
     }
 
-    // Records the viewport, fitting the graph to it when asked; true when the camera moved.
+    // Records the viewport, gliding to fit the graph in it when asked; true when the camera
+    // moved.
     fn frame(&self, bounds: Bounds<Pixels>) -> bool {
         let mut lens = self.lens.borrow_mut();
         lens.bounds = bounds;
@@ -756,15 +852,10 @@ impl Camera {
             return false;
         }
         let (zoom, offset) = fit(lens.extent, viewport);
-        lens.zoom = zoom;
-        lens.offset = offset;
+        let center = View::new(zoom).under(lens.middle(), offset);
+        lens.head(Sight { zoom, center });
         lens.fit = false;
         true
-    }
-
-    fn middle(&self) -> (f32, f32) {
-        let size = self.lens.borrow().bounds.size;
-        (f32::from(size.width) / 2., f32::from(size.height) / 2.)
     }
 }
 
@@ -919,6 +1010,8 @@ struct Edge {
     from: (f32, f32),
     to: (f32, f32),
     stroke: Stroke,
+    // Fading in with the card it goes to.
+    alpha: f32,
 }
 
 #[derive(IntoElement)]
@@ -999,11 +1092,13 @@ impl Graph {
 }
 
 impl RenderOnce for Graph {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let now = Instant::now();
+        let camera = self.camera;
+        let panning = camera.step(now, cx.reduce_motion());
         let theme = cx.theme();
         let shapes: Vec<Shape> = self.roots.iter().map(shape).collect();
         let layout = layout(&shapes);
-        let camera = self.camera;
         let view = View::new(camera.zoom());
         let zoom = view.zoom;
         let (line, lit) = (theme.muted_foreground.opacity(0.45), theme.blue);
@@ -1040,6 +1135,19 @@ impl RenderOnce for Graph {
                 .and_then(|holder| tucked[holder])
                 .or_else(|| folds.get(&card.card.id).copied());
             tucked.push(by);
+        }
+
+        // Each card in sight where it shows now, on its way to where it goes, and how opaque: one
+        // coming in comes out of the card holding it. Cards dragged are just where the mouse is.
+        let snap = matches!(drag, Some(Drag::Cards(..)));
+        let mut alphas = vec![1.; placed.len()];
+        for ix in 0..placed.len() {
+            if tucked[ix].is_some() {
+                continue;
+            }
+            let from = placed[ix].holder.map(|hx| placed[hx].at);
+            let card = &mut placed[ix];
+            (card.at, alphas[ix]) = camera.place(&card.card.id, card.at, from, now, snap);
         }
         let rect = |ix: usize| {
             let card = &placed[ix];
@@ -1089,8 +1197,9 @@ impl RenderOnce for Graph {
                 .collect();
             let movers = heads(&keys, &holders);
             if group.collapsed {
-                stood[gx] = Some((hull.0, hull.1));
-                stands.push((group, (hull.0, hull.1), movers, keys.len()));
+                let shown = camera.place(&group.id, (hull.0, hull.1), None, now, snap);
+                stood[gx] = Some(shown);
+                stands.push((group, shown, movers, keys.len()));
             } else {
                 frames.push((group, frame(hull), movers, keys.len()));
             }
@@ -1114,21 +1223,26 @@ impl RenderOnce for Graph {
                     from,
                     to: (card.at.0, card.at.1 + HEIGHT / 2.),
                     stroke: if card.open { Stroke::Lit } else { Stroke::Tree },
+                    alpha: alphas[ix],
                 }),
                 Some(gx) => {
-                    if let Some(at) = stood[gx]
+                    if let Some((at, alpha)) = stood[gx]
                         && joined.insert((hx, gx))
                     {
                         edges.push(Edge {
                             from,
                             to: (at.0, at.1 + HEIGHT / 2.),
                             stroke: Stroke::Tree,
+                            alpha,
                         });
                     }
                 }
             }
         }
         camera.remember(self.nudges, boxes, holders, (layout.width, layout.height));
+        if camera.settle(now) || panning {
+            window.request_animation_frame();
+        }
 
         let hands = Hands {
             camera: camera.clone(),
@@ -1136,19 +1250,19 @@ impl RenderOnce for Graph {
             hide: self.on_hide,
         };
         let mut cards = Vec::new();
-        for (card, out) in placed.into_iter().zip(tucked) {
+        for ((card, out), alpha) in placed.into_iter().zip(tucked).zip(alphas) {
             if out.is_some() {
                 continue;
             }
             let (x, y) = view.at(card.at);
             let height = match card.card.form {
                 Form::Chip => {
-                    cards.push(chip_element(card.card, (x, y), zoom, cx));
+                    cards.push(chip_element(card.card, (x, y), zoom, alpha, cx));
                     continue;
                 }
                 // The sheets go under the top of the pile, which is a card's height.
                 Form::Pile { .. } => {
-                    cards.extend(sheets((x, y), zoom, cx));
+                    cards.extend(sheets((x, y), zoom, alpha, cx));
                     HEIGHT
                 }
                 Form::Plain => card.size.1,
@@ -1157,6 +1271,7 @@ impl RenderOnce for Graph {
             let look = Look {
                 open: card.open,
                 picked: camera.is_picked(&card.card.id),
+                alpha,
             };
             cards.push(card_element(
                 card.card,
@@ -1168,13 +1283,14 @@ impl RenderOnce for Graph {
                 cx,
             ));
         }
-        for (group, at, movers, count) in stands {
+        for (group, (at, alpha), movers, count) in stands {
             let (x, y) = view.at(at);
             let frame = (x, y, WIDTH * zoom, HEIGHT * zoom);
             let card = group.stand_in(count);
             let look = Look {
                 open: false,
                 picked: false,
+                alpha,
             };
             cards.push(card_element(
                 card,
@@ -1354,15 +1470,13 @@ fn zoom_bar(camera: &Camera, untangle: Option<Handler>, cx: &App) -> impl IntoEl
         .bg(theme.sidebar)
         .children(untangle)
         .child(
-            button("zoom-out", Some(Glyph::Minus), None).on_click(act(|camera| {
-                camera.zoom_to(camera.zoom() / STEP, camera.middle());
-            })),
+            button("zoom-out", Some(Glyph::Minus), None)
+                .on_click(act(|camera| camera.glide_zoom(1. / STEP))),
         )
         .child(button("zoom-reset", None, Some(percent)).on_click(act(Camera::reset)))
         .child(
-            button("zoom-in", Some(Glyph::Plus), None).on_click(act(|camera| {
-                camera.zoom_to(camera.zoom() * STEP, camera.middle());
-            })),
+            button("zoom-in", Some(Glyph::Plus), None)
+                .on_click(act(|camera| camera.glide_zoom(STEP))),
         )
 }
 
@@ -1459,7 +1573,7 @@ fn paint(
         path.move_to(at(from));
         path.cubic_bezier_to(at(to), at((from.0 + bend, from.1)), at((to.0 - bend, to.1)));
         if let Ok(path) = path.build() {
-            window.paint_path(path, color);
+            window.paint_path(path, color.opacity(edge.alpha));
         }
     }
 }
@@ -1480,6 +1594,8 @@ enum Press {
 struct Look {
     open: bool,
     picked: bool,
+    // Fading in as it comes.
+    alpha: f32,
 }
 
 fn card_element(
@@ -1629,6 +1745,7 @@ fn card_element(
         .w(px(w))
         .h(px(h))
         .overflow_hidden()
+        .opacity(look.alpha)
         .rounded_lg()
         .border_1()
         .border_color(if look.open || look.picked {
@@ -1649,7 +1766,7 @@ fn card_element(
 
 // The two sheets showing under the top of a pile, each a little lighter than the card, the
 // lower one narrower.
-fn sheets((x, y): (f32, f32), zoom: f32, cx: &App) -> [AnyElement; 2] {
+fn sheets((x, y): (f32, f32), zoom: f32, alpha: f32, cx: &App) -> [AnyElement; 2] {
     let theme = cx.theme();
     let sheet = |down: f32, inset: f32, bg: Hsla| {
         div()
@@ -1658,6 +1775,7 @@ fn sheets((x, y): (f32, f32), zoom: f32, cx: &App) -> [AnyElement; 2] {
             .top(px(y + down * zoom))
             .w(px((WIDTH - 2. * inset) * zoom))
             .h(px(HEIGHT * zoom))
+            .opacity(alpha)
             .rounded_lg()
             .border_1()
             .border_color(theme.border)
@@ -1673,7 +1791,7 @@ fn sheets((x, y): (f32, f32), zoom: f32, cx: &App) -> [AnyElement; 2] {
 
 // A chip at the end of a column: its icon and title in a dashed pill. A press on it neither
 // moves the graph nor picks anything.
-fn chip_element(card: Card, (x, y): (f32, f32), zoom: f32, cx: &App) -> AnyElement {
+fn chip_element(card: Card, (x, y): (f32, f32), zoom: f32, alpha: f32, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let (muted, fg, hover) = (theme.muted_foreground, theme.foreground, theme.sidebar);
     h_flex()
@@ -1682,6 +1800,7 @@ fn chip_element(card: Card, (x, y): (f32, f32), zoom: f32, cx: &App) -> AnyEleme
         .left(px(x))
         .top(px(y))
         .h(px(CHIP * zoom))
+        .opacity(alpha)
         .px_3()
         .gap_1p5()
         .rounded_full()

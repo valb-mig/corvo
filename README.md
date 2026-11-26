@@ -46,6 +46,8 @@ The workspace opens on its home. Putting the code away reads the open folders fr
 
 The camera is free, with no edge to stop it: drag the background, or turn the wheel, to move the graph anywhere. Drag a card by its header to move it, with all it holds, wherever reads best; moved cards keep their place while others open and close, and the layout button at the top left (shown once something was moved) puts every card back and centres the graph; groups stay, their frames around their cards where the layout puts them. Hold `Ctrl` and turn the wheel to zoom, around the mouse, or use the − / % / + at the top left (the % goes back to where it started, at 100%). A drag that ends on a card does not open or close it.
 
+Nothing on the home jumps. When cards open, close, hide or come back, the cards that stay glide to their new place, and those that come in come out of the card holding them, fading in; those that go leave at once. The − / % / + and the layout button glide the camera too, while the wheel and drags move it at once. With the desktop's reduced motion on, nothing glides. The motion lives in `corvo_ui::motion`.
+
 ## Outline
 
 The structure card at the foot of the code's panel shows the outline of the active file: types, functions, methods, fields, constants and enum variants, nested as in the code. It follows the file picked in the tree and the tab picked. Click a symbol to put the cursor on it; a click on a symbol with children also folds or unfolds it. A file in a language with no outline has no card, the tree taking the whole panel; one with nothing in its outline shows `No structure`. With no tab open there is no card either.

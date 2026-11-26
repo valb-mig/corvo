@@ -11,6 +11,7 @@ pub mod keys;
 pub mod language_icon;
 pub mod layout;
 pub mod list;
+pub mod motion;
 pub mod notice;
 pub mod statusbar;
 pub mod symbol_icon;
