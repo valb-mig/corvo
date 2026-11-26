@@ -17,7 +17,8 @@ use gpui_kit::{
 
 // Cards as a tree read left to right: an open card holds its cards in the next column, with a
 // curve to each, and any number of cards can be open at once. A column can come in blocks, a
-// little apart, and end in a chip; a card can stand for a pile, with sheets under it. A card can drop a panel down from
+// little apart, and end in a chip; a card can stand for a pile, with sheets under it, the wheel
+// over it turning through what it holds. A card can drop a panel down from
 // under its header; its column widens to hold it. Cards can be picked, with Ctrl or Shift on a
 // click or a box drawn with Shift, to group or hide them together; a group is a frame around its
 // cards, or one card in their place when collapsed.
@@ -40,10 +41,13 @@ pub const CHIP: f32 = 28.;
 
 const ICON: f32 = 16.;
 const STEP: f32 = 1.2;
+// How far the wheel goes to turn a pile by one: a notch of a mouse wheel.
+const TURN: f32 = 48.;
 // The hover group of the top of a pile.
 const PILE: &str = "graph-pile";
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
+type Turn = Rc<dyn Fn(i32, &mut Window, &mut App)>;
 type Draw = Box<dyn Fn(Pixels) -> AnyElement>;
 type Keys = Rc<dyn Fn(Vec<SharedString>, &mut Window, &mut App)>;
 type Moves = Rc<dyn Fn(Vec<(SharedString, (f32, f32))>, &mut Window, &mut App)>;
@@ -62,18 +66,22 @@ pub struct Card {
     tint: Option<(Hsla, bool)>,
     selectable: bool,
     on_click: Option<Handler>,
+    on_turn: Option<Turn>,
     actions: Vec<Action>,
     drop: Option<Drop>,
     form: Form,
 }
 
-// How a card is drawn: plain, as the top of a pile with its sheets under it, or as a chip at the
-// end of its column, with no curve to it and its holder not sitting level with it.
+// How a card is drawn: plain, as the top of a pile with its sheets under it, on its cover or
+// turned to one of what it holds, or as a chip at the end of its column, with no curve to it and
+// its holder not sitting level with it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Form {
     #[default]
     Plain,
-    Pile,
+    Pile {
+        cover: bool,
+    },
     Chip,
 }
 
@@ -102,6 +110,7 @@ impl Card {
             tint: None,
             selectable: true,
             on_click: None,
+            on_turn: None,
             actions: Vec::new(),
             drop: None,
             form: Form::Plain,
@@ -174,10 +183,18 @@ impl Card {
         self
     }
 
-    // Drawn as the top of a pile. Neither a pile nor a chip can be picked.
-    pub fn pile(mut self) -> Self {
-        self.form = Form::Pile;
+    // Drawn as the top of a pile: on its cover, its meta says what a click does, with a chevron.
+    // Neither a pile nor a chip can be picked.
+    pub fn pile(mut self, cover: bool) -> Self {
+        self.form = Form::Pile { cover };
         self.selectable = false;
+        self
+    }
+
+    // What the wheel over the card does, by how many it turns: down is forward. With Ctrl the
+    // wheel still zooms, and sideways it still moves the graph.
+    pub fn on_turn(mut self, f: impl Fn(i32, &mut Window, &mut App) + 'static) -> Self {
+        self.on_turn = Some(Rc::new(f));
         self
     }
 
@@ -191,7 +208,7 @@ impl Card {
     fn size(&self) -> (f32, f32) {
         match (&self.drop, self.form) {
             (Some(drop), _) => (drop.width.max(WIDTH), HEIGHT + drop.height),
-            (None, Form::Pile) => (WIDTH, HEIGHT + SHEETS),
+            (None, Form::Pile { .. }) => (WIDTH, HEIGHT + SHEETS),
             (None, Form::Chip) => (WIDTH, CHIP),
             (None, Form::Plain) => (WIDTH, HEIGHT),
         }
@@ -277,6 +294,7 @@ impl Group {
             tint: None,
             selectable: false,
             on_click: self.on_click,
+            on_turn: None,
             actions: self.actions,
             drop: None,
             form: Form::Plain,
@@ -473,6 +491,8 @@ struct Lens {
     extent: (f32, f32),
     // Fit the graph to the viewport on the next paint, once its size is known.
     fit: bool,
+    // The card the wheel is turning, and how far it went short of a turn.
+    spin: Option<(SharedString, f32)>,
 }
 
 #[derive(Clone)]
@@ -500,6 +520,7 @@ impl Default for Lens {
             holders: HashMap::new(),
             extent: (0., 0.),
             fit: false,
+            spin: None,
         }
     }
 }
@@ -551,6 +572,19 @@ impl Camera {
 
     fn spent(&self) -> bool {
         self.lens.borrow().spent
+    }
+
+    // The wheel went `by` over a card: how many turns that makes with what it went before over
+    // the same card, down being forward.
+    fn turns(&self, id: &SharedString, by: f32) -> i32 {
+        let mut lens = self.lens.borrow_mut();
+        let went = match &lens.spin {
+            Some((card, went)) if card == id => *went,
+            _ => 0.,
+        } - by;
+        let turns = (went / TURN).trunc();
+        lens.spin = Some((id.clone(), went - turns * TURN));
+        turns as i32
     }
 
     fn drag(&self) -> Option<Drag> {
@@ -1113,7 +1147,7 @@ impl RenderOnce for Graph {
                     continue;
                 }
                 // The sheets go under the top of the pile, which is a card's height.
-                Form::Pile => {
+                Form::Pile { .. } => {
                     cards.extend(sheets((x, y), zoom, cx));
                     HEIGHT
                 }
@@ -1465,7 +1499,8 @@ fn card_element(
         None => theme.foreground,
     };
     let head_id = ElementId::Name(format!("{}:head", card.id).into());
-    let pile = card.form == Form::Pile;
+    let pile = matches!(card.form, Form::Pile { .. });
+    let cover = card.form == Form::Pile { cover: true };
     let blue = theme.blue;
     let clickable = card.on_click.is_some();
     let selectable = card.selectable;
@@ -1504,8 +1539,8 @@ fn card_element(
                         .child(card.title),
                 )
                 .children(card.meta.map(|meta| {
-                    // The top of a pile says what a click on it does, with a chevron.
-                    if !pile {
+                    // The cover of a pile says what a click on it does, with a chevron.
+                    if !cover {
                         return div()
                             .truncate()
                             .text_xs()
@@ -1566,6 +1601,21 @@ fn card_element(
             .on_scroll(|_, _, cx| cx.stop_propagation())
             .child(drop.element)
     });
+    let turn = card.on_turn.map(|f| {
+        let (camera, id) = (hands.camera.clone(), card.id.clone());
+        move |event: &gpui_kit::ScrollEvent, window: &mut Window, cx: &mut App| {
+            let delta = event.delta.pixel_delta(px(16.));
+            let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+            if event.modifiers.control || event.modifiers.platform || dx.abs() > dy.abs() {
+                return;
+            }
+            cx.stop_propagation();
+            let turns = camera.turns(&id, dy);
+            if turns != 0 {
+                f(turns, window, cx);
+            }
+        }
+    });
     let bg = match card.tint {
         _ if look.picked => theme.sidebar.blend(theme.blue.opacity(0.14)),
         Some((color, true)) => theme.sidebar.blend(color.opacity(0.1)),
@@ -1591,6 +1641,7 @@ fn card_element(
             el.hover(move |style| style.border_color(muted))
         })
         .when(pile, |el| el.group(PILE).shadow_md())
+        .when_some(turn, |el, turn| el.on_scroll(turn))
         .child(head)
         .children(drop)
         .into_any_element()

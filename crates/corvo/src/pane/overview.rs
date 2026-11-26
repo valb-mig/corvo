@@ -65,6 +65,8 @@ pub struct Overview {
     places: RefCell<HashMap<SharedString, (Place, String)>>,
     // The group whose title is being typed in.
     naming: Option<(u64, Entity<field::State>, Subscription)>,
+    // How far the wheel turned each pile, by its key: 0 is its cover, then each of its files.
+    turned: HashMap<SharedString, usize>,
 }
 
 impl EventEmitter<Event> for Overview {}
@@ -78,6 +80,7 @@ impl Overview {
             camera: Camera::default(),
             places: RefCell::default(),
             naming: None,
+            turned: HashMap::new(),
         }
     }
 
@@ -287,7 +290,7 @@ impl Overview {
             for (ix, item) in block.into_iter().enumerate() {
                 let branch = match item {
                     Item::Node(node) => self.node(atlas, &node, view, cx),
-                    Item::Pile(pile) => piled(dir, &pile, view),
+                    Item::Pile(pile) => self.piled(dir, &pile, view),
                 };
                 branches.push(branch.apart(ix == 0));
             }
@@ -296,6 +299,61 @@ impl Overview {
             branches.push(fold(dir, count, view));
         }
         branches
+    }
+
+    // A pile of the files of one kind in a crowded folder. On its cover a click shows them all;
+    // the wheel turns it to each of its files and back to the cover, a click opening the file
+    // it shows.
+    fn piled(&self, dir: &Path, pile: &Pile, view: &WeakEntity<Self>) -> Branch {
+        let files = pile.files();
+        let key = SharedString::from(format!("pile:{}:{}", dir.display(), pile.kind()));
+        let count = files.len();
+        let at = self.turned.get(&key).copied().unwrap_or_default() % (count + 1);
+        let card = match at.checked_sub(1).and_then(|ix| files.get(ix)) {
+            None => {
+                let first = files
+                    .first()
+                    .map(|file| file.name().to_owned())
+                    .unwrap_or_default();
+                let title = format!("{count} {} files", pile.kind());
+                let card = Card::new(key.clone(), title)
+                    .icon(move |size| FileIcon::new(first.clone()).size(size))
+                    .meta("Show all")
+                    .pile(true);
+                clicks(card, Act::Spread(dir.to_path_buf()), view)
+            }
+            Some(file) => {
+                let name = file.name().to_owned();
+                let meta = format!("{at} of {count} {} files", pile.kind());
+                let (opener, path) = (view.clone(), file.path().to_path_buf());
+                Card::new(key.clone(), name.clone())
+                    .icon(move |size| FileIcon::new(name.clone()).size(size))
+                    .meta(meta)
+                    .pile(false)
+                    .on_click(move |_, cx| {
+                        let path = path.clone();
+                        opener.update(cx, |_, cx| cx.emit(Event::Open(path))).ok();
+                    })
+            }
+        };
+        let (spread, turner) = (run(Act::Spread(dir.to_path_buf()), view), view.clone());
+        let card = card
+            .action("Show all", Glyph::Expand, spread)
+            .on_turn(move |by, _, cx| {
+                let key = key.clone();
+                turner
+                    .update(cx, |this, cx| this.turn(key, by, count, cx))
+                    .ok();
+            });
+        Branch::new(card)
+    }
+
+    // Turns a pile of `count` files by `by`, its cover counting as one more.
+    fn turn(&mut self, key: SharedString, by: i32, count: usize, cx: &mut Context<Self>) {
+        let at = self.turned.entry(key).or_default();
+        let sides = count as i64 + 1;
+        *at = (*at as i64 + i64::from(by)).rem_euclid(sides) as usize;
+        cx.notify();
     }
 
     // Only a folder opens on the home; a file opens in the code.
@@ -459,21 +517,6 @@ fn run(act: Act, view: &WeakEntity<Overview>) -> impl Fn(&mut Window, &mut App) 
 
 fn clicks(card: Card, act: Act, view: &WeakEntity<Overview>) -> Card {
     card.on_click(run(act, view))
-}
-
-// A pile of the files of one kind in a crowded folder; a click shows them all.
-fn piled(dir: &Path, pile: &Pile, view: &WeakEntity<Overview>) -> Branch {
-    let files = pile.files();
-    let first = files
-        .first()
-        .map(|file| file.name().to_owned())
-        .unwrap_or_default();
-    let title = format!("{} {} files", files.len(), pile.kind());
-    let card = Card::new(format!("pile:{}:{}", dir.display(), pile.kind()), title)
-        .icon(move |size| FileIcon::new(first.clone()).size(size))
-        .meta("Show all")
-        .pile();
-    Branch::new(clicks(card, Act::Spread(dir.to_path_buf()), view))
 }
 
 // The chip at the end of a crowded folder spread out, which piles its files back.
