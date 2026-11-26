@@ -156,7 +156,11 @@ impl Repo {
                 });
             }
         }
-        for gone in before.changes.iter().filter(|c| !self.files.contains_key(&c.path)) {
+        for gone in before
+            .changes
+            .iter()
+            .filter(|c| !self.files.contains_key(&c.path))
+        {
             moved.push(Moved {
                 path: gone.path.clone(),
                 shown: false,

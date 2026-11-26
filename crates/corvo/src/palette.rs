@@ -70,19 +70,26 @@ pub fn chats(
     let now = now();
     for chat in agents.chats().list().filter(|chat| chat.matches(query)) {
         let id = chat.id();
-        let detail = chat.snippet(query).map(|(text, _)| text).unwrap_or_else(|| {
-            let when = ago(chat.updated(), now);
-            let name = agents.agent_name(chat.agent());
-            if chat.is_archived() {
-                format!("{name} · {when} · archived")
-            } else {
-                format!("{name} · {when}")
-            }
-        });
+        let detail = chat
+            .snippet(query)
+            .map(|(text, _)| text)
+            .unwrap_or_else(|| {
+                let when = ago(chat.updated(), now);
+                let name = agents.agent_name(chat.agent());
+                if chat.is_archived() {
+                    format!("{name} · {when} · archived")
+                } else {
+                    format!("{name} · {when}")
+                }
+            });
         let pick = window.clone();
-        let offer = Offer::new(Glyph::MessageSquare, chat.title().to_owned(), move |_, cx| {
-            pick.update(cx, |window, cx| window.pick(id, cx));
-        });
+        let offer = Offer::new(
+            Glyph::MessageSquare,
+            chat.title().to_owned(),
+            move |_, cx| {
+                pick.update(cx, |window, cx| window.pick(id, cx));
+            },
+        );
         offers.push(offer.detail(detail));
     }
     offers

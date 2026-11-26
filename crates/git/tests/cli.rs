@@ -18,11 +18,20 @@ fn run(dir: &Path, args: &[&str]) {
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=corvo", "-c", "user.email=corvo@test"])
-        .args(["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"])
+        .args([
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "commit.gpgsign=false",
+        ])
         .args(args)
         .output()
         .unwrap();
-    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    assert!(
+        done.status.success(),
+        "{}",
+        String::from_utf8_lossy(&done.stderr)
+    );
 }
 
 // A repository with one commit holding a.rs and lib/b.rs.
@@ -56,7 +65,10 @@ fn reads_the_branch_and_what_changed_from_any_folder_inside() {
     assert!(repo.head().is_some());
     assert_eq!(repo.change_of(&dir.join("a.rs")), Some(Change::Modified));
     assert_eq!(repo.change_of(&dir.join("lib/b.rs")), Some(Change::Deleted));
-    assert_eq!(repo.change_of(&dir.join("lib/c.rs")), Some(Change::Untracked));
+    assert_eq!(
+        repo.change_of(&dir.join("lib/c.rs")),
+        Some(Change::Untracked)
+    );
     assert_eq!(repo.change_of(&dir.join("lib")), Some(Change::Deleted));
     let _ = fs::remove_dir_all(dir);
 }

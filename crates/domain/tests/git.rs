@@ -64,7 +64,10 @@ fn repo() -> Repo {
 #[test]
 fn files_keep_their_change_and_come_sorted() {
     let repo = repo();
-    assert_eq!(repo.change_of(Path::new("/p/src/a.rs")), Some(Change::Modified));
+    assert_eq!(
+        repo.change_of(Path::new("/p/src/a.rs")),
+        Some(Change::Modified)
+    );
     assert_eq!(repo.change_of(Path::new("/p/src/c.rs")), None);
     let paths: Vec<_> = repo.changes().iter().map(|c| c.path.clone()).collect();
     assert_eq!(

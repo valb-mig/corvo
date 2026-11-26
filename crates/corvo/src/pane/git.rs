@@ -311,7 +311,12 @@ impl GitWindow {
         v_flex()
             .size_full()
             .child(head)
-            .child(div().flex_1().min_h_0().child(Diff::new(&self.diff).header_visible(false)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(Diff::new(&self.diff).header_visible(false)),
+            )
             .into_any_element()
     }
 }

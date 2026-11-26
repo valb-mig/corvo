@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use corvo_domain::server::Registry;
 use corvo_domain::{Atlas, Group, Moved, Node, Place, Workbench, stack};
 use corvo_ui::file_icon::{FileIcon, FolderIcon};
-use corvo_ui::graph::{self, Branch, Camera, Card, Graph};
 use corvo_ui::git::tint;
+use corvo_ui::graph::{self, Branch, Camera, Card, Graph};
 use corvo_ui::{field, notice};
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::{
@@ -252,13 +252,7 @@ impl Overview {
             .children(self.entries(atlas, root, view, cx))
     }
 
-    fn entries(
-        &self,
-        atlas: &Atlas,
-        dir: &Path,
-        view: &WeakEntity<Self>,
-        cx: &App,
-    ) -> Vec<Branch> {
+    fn entries(&self, atlas: &Atlas, dir: &Path, view: &WeakEntity<Self>, cx: &App) -> Vec<Branch> {
         let children = atlas.children(dir).unwrap_or_default();
         if children.is_empty() {
             return vec![note(dir, "Empty folder")];

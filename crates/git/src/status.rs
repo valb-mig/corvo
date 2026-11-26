@@ -53,7 +53,10 @@ pub fn parse(root: &Path, out: &[u8]) -> Repo {
         }
     }
     let branch = branch
-        .or_else(|| head.as_deref().map(|head| head[..head.len().min(7)].to_owned()))
+        .or_else(|| {
+            head.as_deref()
+                .map(|head| head[..head.len().min(7)].to_owned())
+        })
         .unwrap_or_default();
     Repo::new(root, branch, head, changes)
 }

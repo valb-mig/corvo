@@ -6,7 +6,15 @@ use gpui_kit::{Action, App, KeyBinding, KeyBindingContextPredicate, actions};
 
 actions!(
     corvo,
-    [Save, ShowCode, ShowGit, ShowChat, OpenPalette, Dismiss, ToggleTree]
+    [
+        Save,
+        ShowCode,
+        ShowGit,
+        ShowChat,
+        OpenPalette,
+        Dismiss,
+        ToggleTree
+    ]
 );
 
 pub fn bind(keymap: &Keymap, cx: &mut App) {

@@ -185,17 +185,24 @@ impl Code {
         let head = repo.head().map(str::to_owned);
         let root = repo.root().to_path_buf();
         let git = repos.git();
-        if self.marked.get(path).is_some_and(|marked| marked.head == head) {
+        if self
+            .marked
+            .get(path)
+            .is_some_and(|marked| marked.head == head)
+        {
             return;
         }
         let state = state.clone();
-        let marked = self.marked.entry(path.to_path_buf()).or_insert_with(|| Marked {
-            marks: state.update(cx, |state, cx| editor::Marks::new(state, cx)),
-            head: None,
-            base: None,
-            read: false,
-            _soon: None,
-        });
+        let marked = self
+            .marked
+            .entry(path.to_path_buf())
+            .or_insert_with(|| Marked {
+                marks: state.update(cx, editor::Marks::new),
+                head: None,
+                base: None,
+                read: false,
+                _soon: None,
+            });
         marked.head = head.clone();
         marked.read = false;
         let file = path.to_path_buf();
