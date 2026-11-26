@@ -7,6 +7,8 @@ pub enum Command {
     Definition,
     // Brings the code over the home.
     ShowCode,
+    // Brings the git window over the home, or puts it away.
+    ShowGit,
     // Puts the code away, back to the home.
     Dismiss,
     // Hides the file tree beside the code, or brings it back.

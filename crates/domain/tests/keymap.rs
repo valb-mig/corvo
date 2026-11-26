@@ -22,6 +22,17 @@ fn ctrl_shift_e_shows_the_code_from_anywhere() {
 }
 
 #[test]
+fn ctrl_shift_g_shows_git_from_anywhere() {
+    let keymap = Keymap::default();
+    let show = keymap
+        .bindings()
+        .iter()
+        .find(|b| b.chord() == "ctrl-shift-g");
+    assert_eq!(show.map(Binding::command), Some(Command::ShowGit));
+    assert_eq!(show.map(Binding::scope), Some(Scope::Global));
+}
+
+#[test]
 fn ctrl_b_toggles_the_tree_from_anywhere() {
     let keymap = Keymap::default();
     let toggle = keymap.bindings().iter().find(|b| b.chord() == "ctrl-b");

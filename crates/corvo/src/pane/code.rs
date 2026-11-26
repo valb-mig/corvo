@@ -3,21 +3,24 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use corvo_domain::{Content, Doc, Lang, Workbench};
+use corvo_domain::{Change, Content, Doc, Hunk, HunkMark, Lang, Workbench, hunks};
 use corvo_lsp::Hub;
 use corvo_ui::button::Button;
 use corvo_ui::{editor, notice, tab, viewer};
 use gpui_kit::component::{ActiveTheme as _, IconName, h_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, Window, div,
+    ParentElement as _, Render, Styled as _, Subscription, Task, Window, div,
 };
 use lsp_types::{Diagnostic, Position};
 
 use crate::assist::Assist;
 use crate::pane::overview::Overview;
+use crate::repos::Repos;
 
 const IDLE: Duration = Duration::from_secs(60);
+// How long typing rests before the changes against the last commit are marked again.
+const REMARK: Duration = Duration::from_millis(150);
 
 pub enum Event {
     Active(PathBuf),
@@ -34,30 +37,55 @@ enum View {
     Binary(u64),
 }
 
+// The changes marked in a file's editor, against the file as the commit it was read at has it.
+struct Marked {
+    marks: editor::Marks,
+    head: Option<String>,
+    // The file in that commit, once read; none when it is not there.
+    base: Option<String>,
+    read: bool,
+    // The next marking, a moment after the last keystroke.
+    _soon: Option<Task<()>>,
+}
+
 // The open files, each in a tab, over the home while shown; put away, they stay open for the
 // next time.
 pub struct Code {
     bench: Entity<Workbench>,
     hub: Entity<Hub>,
     home: Entity<Overview>,
+    repos: Entity<Repos>,
     shown: bool,
     views: HashMap<PathBuf, View>,
     texts: HashMap<PathBuf, editor::Rope>,
     subs: HashMap<PathBuf, Vec<Subscription>>,
+    marked: HashMap<PathBuf, Marked>,
+    _repos: Subscription,
 }
 
 impl EventEmitter<Event> for Code {}
 
 impl Code {
-    pub fn new(bench: Entity<Workbench>, hub: Entity<Hub>, home: Entity<Overview>) -> Self {
+    pub fn new(
+        bench: Entity<Workbench>,
+        hub: Entity<Hub>,
+        home: Entity<Overview>,
+        repos: Entity<Repos>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // A new commit, or a file that came into git or left it, marks the open files anew.
+        let watch = cx.observe(&repos, |this, _, cx| this.rebase_all(cx));
         Self {
             bench,
             hub,
             home,
+            repos,
             shown: false,
             views: HashMap::new(),
             texts: HashMap::new(),
             subs: HashMap::new(),
+            marked: HashMap::new(),
+            _repos: watch,
         }
     }
 
@@ -122,7 +150,107 @@ impl Code {
             Content::Image => View::Image,
             Content::Binary { size } => View::Binary(size),
         };
+        let text = matches!(view, View::Text(_));
         self.views.insert(path.to_path_buf(), view);
+        if text {
+            self.rebase(path, cx);
+        }
+    }
+
+    fn rebase_all(&mut self, cx: &mut Context<Self>) {
+        let paths: Vec<PathBuf> = self
+            .views
+            .iter()
+            .filter(|(_, view)| matches!(view, View::Text(_)))
+            .map(|(path, _)| path.clone())
+            .collect();
+        for path in paths {
+            self.rebase(&path, cx);
+            self.remark(&path, cx);
+        }
+    }
+
+    // Reads the file as the last commit has it, unless it was read at that commit already.
+    fn rebase(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let Some(View::Text(state)) = self.views.get(path) else {
+            return;
+        };
+        let repos = self.repos.read(cx);
+        let Some(repo) = repos.repo_of(path) else {
+            // Out of every repository, or out of git now: nothing to mark.
+            if let Some(marked) = self.marked.remove(path) {
+                marked.marks.clear(cx);
+            }
+            return;
+        };
+        let head = repo.head().map(str::to_owned);
+        let root = repo.root().to_path_buf();
+        let git = repos.git();
+        if self.marked.get(path).is_some_and(|marked| marked.head == head) {
+            return;
+        }
+        let state = state.clone();
+        let marked = self.marked.entry(path.to_path_buf()).or_insert_with(|| Marked {
+            marks: state.update(cx, |state, cx| editor::Marks::new(state, cx)),
+            head: None,
+            base: None,
+            read: false,
+            _soon: None,
+        });
+        marked.head = head.clone();
+        marked.read = false;
+        let file = path.to_path_buf();
+        let task = cx
+            .background_executor()
+            .spawn(async move { git.base(&root, &file).ok().flatten() });
+        let key = path.to_path_buf();
+        cx.spawn(async move |this, cx| {
+            let base = task.await;
+            this.update(cx, |this, cx| {
+                // A newer commit came while this one was read.
+                let Some(marked) = this.marked.get_mut(&key).filter(|m| m.head == head) else {
+                    return;
+                };
+                marked.base = base;
+                marked.read = true;
+                this.remark(&key, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn remark_soon(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let key = path.to_path_buf();
+        let soon = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(REMARK).await;
+            this.update(cx, |this, cx| this.remark(&key, cx)).ok();
+        });
+        if let Some(marked) = self.marked.get_mut(path) {
+            marked._soon = Some(soon);
+        }
+    }
+
+    // Marks what the text in the editor changed from the last commit. A file the commit does
+    // not have is all new, and only its bars show; one git leaves out has none.
+    fn remark(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let Some(View::Text(state)) = self.views.get(path) else {
+            return;
+        };
+        let Some(marked) = self.marked.get(path).filter(|marked| marked.read) else {
+            return;
+        };
+        let text = state.read(cx).text().to_string();
+        let change = self.repos.read(cx).change_of(path);
+        let found = match (&marked.base, change) {
+            (Some(base), _) => hunks(base, &text),
+            (None, Some(Change::Added | Change::Untracked)) => vec![Hunk {
+                mark: HunkMark::Added,
+                lines: 0..text.lines().count(),
+            }],
+            (None, _) => Vec::new(),
+        };
+        marked.marks.set(&text, &found, marked.base.is_some(), cx);
     }
 
     fn edit(
@@ -152,6 +280,7 @@ impl Code {
         let touch = cx.subscribe(&state, move |this, _, event: &editor::Event, cx| {
             if matches!(event, editor::Event::Change) {
                 this.touch(&key, cx);
+                this.remark_soon(&key, cx);
             }
         });
         let key = path.to_path_buf();
@@ -231,6 +360,7 @@ impl Code {
         self.views.remove(&path);
         self.texts.remove(&path);
         self.subs.remove(&path);
+        self.marked.remove(&path);
         if self.bench.read(cx).tabs().active().is_none() {
             cx.emit(Event::Emptied);
             cx.notify();
@@ -292,6 +422,7 @@ impl Code {
 impl Render for Code {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tabs = self.bench.read(cx).tabs();
+        let repos = self.repos.read(cx);
         let items = tabs
             .docs()
             .iter()
@@ -301,6 +432,7 @@ impl Render for Code {
                     doc.name().to_owned(),
                     doc.is_dirty(),
                 )
+                .change(repos.change_of(doc.path()))
             })
             .collect();
         let active = tabs.active_ix();

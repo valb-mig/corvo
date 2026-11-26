@@ -1076,6 +1076,7 @@ dependencies = [
  "corvo-agent",
  "corvo-domain",
  "corvo-fs",
+ "corvo-git",
  "corvo-lsp",
  "corvo-syntax",
  "corvo-ui",

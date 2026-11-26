@@ -3,7 +3,7 @@ use gpui_kit::component::list::ListItem;
 use gpui_kit::component::tree::{Tree, tree};
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
-    App, Entity, IntoElement, ParentElement as _, RenderOnce, Styled as _, Window, div, px,
+    App, Entity, Hsla, IntoElement, ParentElement as _, RenderOnce, Styled as _, Window, div, px,
 };
 
 use crate::file_icon::{FileIcon, FolderIcon};
@@ -23,10 +23,10 @@ pub struct Panel {
 impl Panel {
     pub fn new<R>(state: &Entity<State>, row: R) -> Self
     where
-        R: Fn(&Entry) -> ListItem + 'static,
+        R: Fn(&Entry, &App) -> ListItem + 'static,
     {
         Self {
-            tree: tree(state, move |_, entry, _, _, _| row(entry)),
+            tree: tree(state, move |_, entry, _, _, cx| row(entry, cx)),
         }
     }
 }
@@ -59,6 +59,16 @@ impl Row {
 
     pub fn symbol(entry: &Entry, kind: SymbolKind) -> ListItem {
         Self::build(entry, SymbolIcon::new(kind).size(ICON))
+    }
+
+    // A row in a color of its own, as a changed file or folder; a file with a light fill behind.
+    pub fn tint(item: ListItem, color: Hsla, fill: bool) -> ListItem {
+        let item = item.text_color(color);
+        if fill {
+            item.bg(color.opacity(0.1))
+        } else {
+            item
+        }
     }
 
     fn build(entry: &Entry, icon: impl IntoElement) -> ListItem {

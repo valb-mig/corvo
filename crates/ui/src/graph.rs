@@ -50,6 +50,8 @@ pub struct Card {
     meta: Option<SharedString>,
     badge: Option<SharedString>,
     muted: bool,
+    // A color of its own for the title, and a light fill of it behind the card.
+    tint: Option<(Hsla, bool)>,
     selectable: bool,
     on_click: Option<Handler>,
     actions: Vec<Action>,
@@ -78,6 +80,7 @@ impl Card {
             meta: None,
             badge: None,
             muted: false,
+            tint: None,
             selectable: true,
             on_click: None,
             actions: Vec::new(),
@@ -107,6 +110,11 @@ impl Card {
 
     pub fn muted(mut self, muted: bool) -> Self {
         self.muted = muted;
+        self
+    }
+
+    pub fn tint(mut self, color: Hsla, fill: bool) -> Self {
+        self.tint = Some((color, fill));
         self
     }
 
@@ -230,6 +238,7 @@ impl Group {
             meta: Some(meta.into()),
             badge: None,
             muted: false,
+            tint: None,
             selectable: false,
             on_click: self.on_click,
             actions: self.actions,
@@ -1375,10 +1384,10 @@ fn card_element(
 ) -> AnyElement {
     let theme = cx.theme();
     let muted = theme.muted_foreground;
-    let title = if card.muted {
-        theme.muted_foreground
-    } else {
-        theme.foreground
+    let title = match card.tint {
+        _ if card.muted => theme.muted_foreground,
+        Some((color, _)) => color,
+        None => theme.foreground,
     };
     let head_id = ElementId::Name(format!("{}:head", card.id).into());
     let clickable = card.on_click.is_some();
@@ -1464,10 +1473,10 @@ fn card_element(
             .on_scroll(|_, _, cx| cx.stop_propagation())
             .child(drop.element)
     });
-    let bg = if look.picked {
-        theme.sidebar.blend(theme.blue.opacity(0.14))
-    } else {
-        theme.sidebar
+    let bg = match card.tint {
+        _ if look.picked => theme.sidebar.blend(theme.blue.opacity(0.14)),
+        Some((color, true)) => theme.sidebar.blend(color.opacity(0.1)),
+        _ => theme.sidebar,
     };
     v_flex()
         .id(ElementId::Name(card.id))

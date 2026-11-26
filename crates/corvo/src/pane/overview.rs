@@ -6,12 +6,15 @@ use corvo_domain::server::Registry;
 use corvo_domain::{Atlas, Group, Node, Place, Workbench, stack};
 use corvo_ui::file_icon::{FileIcon, FolderIcon};
 use corvo_ui::graph::{self, Branch, Camera, Card, Graph};
+use corvo_ui::git::tint;
 use corvo_ui::{field, notice};
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::{
     App, AppContext as _, Context, Entity, EventEmitter, IntoElement, Render, SharedString,
     Subscription, WeakEntity, Window,
 };
+
+use crate::repos::Repos;
 
 pub enum Event {
     // A project stands alone as the root now, or none does.
@@ -52,6 +55,7 @@ enum Act {
 pub struct Overview {
     bench: Entity<Workbench>,
     registry: Registry,
+    repos: Entity<Repos>,
     camera: Camera,
     // The card that can be hidden under each key, as last rendered.
     places: RefCell<HashMap<SharedString, (Place, String)>>,
@@ -62,10 +66,11 @@ pub struct Overview {
 impl EventEmitter<Event> for Overview {}
 
 impl Overview {
-    pub fn new(bench: Entity<Workbench>, registry: Registry) -> Self {
+    pub fn new(bench: Entity<Workbench>, registry: Registry, repos: Entity<Repos>) -> Self {
         Self {
             bench,
             registry,
+            repos,
             camera: Camera::default(),
             places: RefCell::default(),
             naming: None,
@@ -199,7 +204,7 @@ impl Overview {
     }
 
     // The linked projects, each a root: picking one stands it alone.
-    fn workspace(&self, atlas: &Atlas, view: &WeakEntity<Self>) -> Vec<Branch> {
+    fn workspace(&self, atlas: &Atlas, view: &WeakEntity<Self>, cx: &App) -> Vec<Branch> {
         if atlas.projects().is_empty() {
             let link = view.clone();
             let card = Card::new("note:workspace", "No projects linked")
@@ -217,7 +222,7 @@ impl Overview {
             .map(|project| {
                 let node = Node::dir(project);
                 let act = Act::Isolate(Some(project.clone()));
-                let card = self.node_card(atlas, &node, false, act, view);
+                let card = self.node_card(atlas, &node, false, act, view, cx);
                 Branch::new(unlinkable(self.hideable(card, &node, view), project, view))
             })
             .collect();
@@ -229,15 +234,21 @@ impl Overview {
     }
 
     // The isolated project, open, and clicking it goes back to all of them.
-    fn project(&self, atlas: &Atlas, root: &Path, view: &WeakEntity<Self>) -> Branch {
+    fn project(&self, atlas: &Atlas, root: &Path, view: &WeakEntity<Self>, cx: &App) -> Branch {
         let node = Node::dir(root);
-        let card = self.node_card(atlas, &node, true, Act::Isolate(None), view);
+        let card = self.node_card(atlas, &node, true, Act::Isolate(None), view, cx);
         Branch::new(unlinkable(card, root, view))
             .open(true)
-            .children(self.entries(atlas, root, view))
+            .children(self.entries(atlas, root, view, cx))
     }
 
-    fn entries(&self, atlas: &Atlas, dir: &Path, view: &WeakEntity<Self>) -> Vec<Branch> {
+    fn entries(
+        &self,
+        atlas: &Atlas,
+        dir: &Path,
+        view: &WeakEntity<Self>,
+        cx: &App,
+    ) -> Vec<Branch> {
         let children = atlas.children(dir).unwrap_or_default();
         if children.is_empty() {
             return vec![note(dir, "Empty folder")];
@@ -251,7 +262,7 @@ impl Overview {
                     &id(node.path()),
                 )
             })
-            .map(|node| self.node(atlas, node, view))
+            .map(|node| self.node(atlas, node, view, cx))
             .collect();
         if shown.is_empty() {
             return vec![note(dir, "All hidden")];
@@ -260,15 +271,15 @@ impl Overview {
     }
 
     // Only a folder opens on the home; a file opens in the code.
-    fn node(&self, atlas: &Atlas, node: &Node, view: &WeakEntity<Self>) -> Branch {
+    fn node(&self, atlas: &Atlas, node: &Node, view: &WeakEntity<Self>, cx: &App) -> Branch {
         let path = node.path();
         let open = node.is_dir() && atlas.is_open(path);
-        let card = self.node_card(atlas, node, open, Act::Toggle(node.clone()), view);
+        let card = self.node_card(atlas, node, open, Act::Toggle(node.clone()), view, cx);
         let branch = Branch::new(self.hideable(card, node, view)).open(open);
         if !open {
             return branch;
         }
-        branch.children(self.entries(atlas, path, view))
+        branch.children(self.entries(atlas, path, view, cx))
     }
 
     fn node_card(
@@ -278,10 +289,15 @@ impl Overview {
         open: bool,
         act: Act,
         view: &WeakEntity<Self>,
+        cx: &App,
     ) -> Card {
         let path = node.path();
         let name = node.name().to_owned();
         let mut card = Card::new(id(path), name.clone());
+        // A changed file stands out with a fill; a folder takes the color of what changed in it.
+        if let Some(change) = self.repos.read(cx).change_of(path) {
+            card = card.tint(tint(change, cx), !node.is_dir());
+        }
         if node.is_dir() {
             card = card.icon(move |size| FolderIcon::new(name.clone()).open(open).size(size));
             if let Some(children) = atlas.children(path) {
@@ -362,8 +378,8 @@ impl Render for Overview {
         let view = cx.entity().downgrade();
         let atlas = self.bench.read(cx).atlas();
         let roots = match atlas.root() {
-            Some(root) => vec![self.project(atlas, root, &view)],
-            None => self.workspace(atlas, &view),
+            Some(root) => vec![self.project(atlas, root, &view, cx)],
+            None => self.workspace(atlas, &view, cx),
         };
         let nudges = atlas
             .nudges()

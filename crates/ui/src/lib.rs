@@ -4,6 +4,7 @@ pub mod dropdown;
 pub mod editor;
 pub mod field;
 pub mod file_icon;
+pub mod git;
 pub mod graph;
 pub mod keys;
 pub mod language_icon;

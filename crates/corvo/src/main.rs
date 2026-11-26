@@ -3,6 +3,7 @@ mod assist;
 mod frame;
 mod home;
 mod pane;
+mod repos;
 mod shell;
 
 use corvo_domain::Workspaces;

@@ -1,3 +1,4 @@
+mod marks;
 mod source;
 mod sync;
 
@@ -9,6 +10,7 @@ use gpui_kit::{Context, Entity, IntoElement, Styled as _, Window};
 use lsp_types::Diagnostic;
 
 pub use gpui_kit::component::input::{InputEditsEvent as Edits, InputEvent as Event, Rope};
+pub use marks::Marks;
 pub use source::Source;
 pub use sync::changes;
 

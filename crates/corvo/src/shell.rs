@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
 
 use corvo_domain::server::Registry;
 use corvo_domain::{Chats, Share, Uuid, Workbench, Workspaces, agents, languages};
 use corvo_fs::{JsonChats, JsonOptions, LocalFs};
+use corvo_git::GitCli;
 use corvo_lsp::{Hub, Note};
-use corvo_ui::keys::{Dismiss, Save, ShowCode, ToggleTree};
+use corvo_ui::keys::{Dismiss, Save, ShowCode, ShowGit, ToggleTree};
 use corvo_ui::language_icon::LanguageIcon;
 use corvo_ui::notice;
 use corvo_ui::statusbar::{Action, Popup, StatusBar};
@@ -25,10 +28,16 @@ use crate::pane::chats::{self, ChatWindow};
 use crate::pane::code::{self, Code};
 use crate::pane::dock::{self, Dock, Project};
 use crate::pane::files::{self, Files};
+use crate::pane::git::{self, GitWindow};
 use crate::pane::hidden::Hidden;
 use crate::pane::overview::{self, Overview};
 use crate::pane::stack::Stack;
 use crate::pane::structure::{self, Structure};
+use crate::repos::Repos;
+
+// How often git is read again while the window is in front, for what the agent or a terminal
+// changed.
+const POLL: Duration = Duration::from_secs(3);
 
 pub struct Shell {
     focus: FocusHandle,
@@ -55,6 +64,11 @@ pub struct Shell {
     dock: Entity<Dock>,
     chats: Entity<ChatWindow>,
     chatting: bool,
+    // The repositories of the linked projects, and the git window, which also takes turns with
+    // the code over the home.
+    repos: Entity<Repos>,
+    git: Entity<GitWindow>,
+    gitting: bool,
     // The file tree beside the code, hidden with ctrl-b.
     tree: bool,
     _subs: Vec<Subscription>,
@@ -77,9 +91,13 @@ impl Shell {
         let (hub, mut notes) = Hub::new(registry.clone());
         let hub = cx.new(|_| hub);
         let bench = cx.new(|_| bench);
-        let home = cx.new(|_| Overview::new(bench.clone(), registry));
-        let code = cx.new(|_| Code::new(bench.clone(), hub.clone(), home.clone()));
-        let files = cx.new(|cx| Files::new(bench.clone(), window, cx));
+        let repos = cx.new(|_| Repos::new(Arc::new(GitCli)));
+        let home = cx.new(|_| Overview::new(bench.clone(), registry, repos.clone()));
+        let code = cx.new(|cx| {
+            Code::new(bench.clone(), hub.clone(), home.clone(), repos.clone(), cx)
+        });
+        let files = cx.new(|cx| Files::new(bench.clone(), repos.clone(), window, cx));
+        let git = cx.new(|cx| GitWindow::new(repos.clone(), cx));
         let structure = cx.new(|cx| Structure::new(bench.clone(), window, cx));
         let hidden = cx.new(|_| Hidden::new(bench.clone(), home.clone()));
         let stack = cx.new(|_| Stack::default());
@@ -105,10 +123,15 @@ impl Shell {
         }
         cx.spawn_in(window, async move |this, cx| {
             while let Some(event) = agent_events.next().await {
+                // A reply that ended may have changed files.
+                let ended = matches!(event, corvo_agent::Event::Ended { .. });
                 let alive = this.update(cx, |shell, cx| {
                     shell
                         .agents
                         .update(cx, |agents, cx| agents.apply(event, cx));
+                    if ended {
+                        shell.repos.update(cx, |repos, cx| repos.refresh(cx));
+                    }
                 });
                 if alive.is_err() {
                     break;
@@ -125,20 +148,56 @@ impl Shell {
             cx.subscribe_in(&structure, window, Self::on_structure),
             cx.subscribe_in(&code, window, Self::on_code),
             cx.subscribe_in(&home, window, Self::on_home),
+            cx.subscribe_in(&git, window, Self::on_git),
+            // The status bar shows the branch, and the home colors what changed.
+            cx.observe(&repos, |this, _, cx| {
+                this.home.update(cx, |_, cx| cx.notify());
+                cx.notify();
+            }),
+            // Back in front, git may have moved on.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.repos.update(cx, |repos, cx| repos.refresh(cx));
+                }
+            }),
             // The status bar counts what the home hides.
             cx.observe(&home, |_, _, cx| cx.notify()),
-            // The code comes over the home, or goes; it takes the place of the chat window.
+            // The code comes over the home, or goes; it takes the place of the chat and git
+            // windows.
             cx.observe(&code, |this, code, cx| {
-                if code.read(cx).is_shown() && this.chatting {
-                    this.chatting = false;
-                    this.dock
-                        .update(cx, |dock, cx| dock.set_chatting(false, cx));
+                if code.read(cx).is_shown() {
+                    if this.chatting {
+                        this.chatting = false;
+                        this.dock
+                            .update(cx, |dock, cx| dock.set_chatting(false, cx));
+                    }
+                    this.gitting = false;
                 }
                 cx.notify();
             }),
             // The structure card shows or goes with the active file.
             cx.observe(&structure, |_, _, cx| cx.notify()),
         ];
+
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(POLL).await;
+                let alive = this.update_in(cx, |shell, window, cx| {
+                    if !window.is_window_active() {
+                        return;
+                    }
+                    shell.repos.update(cx, |repos, cx| repos.refresh(cx));
+                    // The patch shown may have changed with the file, its change still the same.
+                    if shell.gitting {
+                        shell.git.update(cx, |git, cx| git.reread(cx));
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
 
         cx.spawn_in(window, async move |this, cx| {
             while let Some(note) = notes.next().await {
@@ -172,6 +231,9 @@ impl Shell {
             dock,
             chats,
             chatting: false,
+            repos,
+            git,
+            gitting: false,
             tree: true,
             _subs: subs,
         };
@@ -250,6 +312,8 @@ impl Shell {
 
     fn rescope(&mut self, cx: &mut Context<Self>) {
         let linked = self.linked(cx);
+        self.repos
+            .update(cx, |repos, cx| repos.track(linked.clone(), cx));
         let active = self.bench.read(cx).project().map(Path::to_path_buf);
         self.hub.update(cx, |hub, _| hub.scope(linked, active));
     }
@@ -305,8 +369,52 @@ impl Shell {
             self.dismiss(window, cx);
         } else if self.chatting {
             self.close_chat(window, cx);
+        } else if self.gitting {
+            self.close_git(window, cx);
         } else {
             cx.propagate();
+        }
+    }
+
+    fn on_show_git(&mut self, _: &ShowGit, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_git(window, cx);
+    }
+
+    // The git window comes over the home in the code's place, or goes.
+    fn toggle_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.gitting {
+            self.close_git(window, cx);
+            return;
+        }
+        self.dismiss(window, cx);
+        if self.chatting {
+            self.close_chat(window, cx);
+        }
+        self.gitting = true;
+        self.repos.update(cx, |repos, cx| repos.refresh(cx));
+        self.git.update(cx, |git, cx| git.reread(cx));
+        cx.notify();
+    }
+
+    fn close_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.gitting = false;
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn on_git(
+        &mut self,
+        _: &Entity<GitWindow>,
+        event: &git::Event,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            git::Event::Open(path) => {
+                self.gitting = false;
+                self.code.update(cx, |code, cx| code.open(path, window, cx));
+            }
+            git::Event::Close => self.close_git(window, cx),
         }
     }
 
@@ -317,6 +425,7 @@ impl Shell {
             return;
         }
         self.dismiss(window, cx);
+        self.gitting = false;
         self.chatting = true;
         self.dock.update(cx, |dock, cx| {
             dock.set_chatting(true, cx);
@@ -520,6 +629,7 @@ impl Shell {
             code::Event::Saved(path) => {
                 self.structure
                     .update(cx, |structure, cx| structure.saved(path, window, cx));
+                self.repos.update(cx, |repos, cx| repos.refresh(cx));
             }
             // The structure has no file left, and the keys go back to the window.
             code::Event::Emptied => {
@@ -677,6 +787,70 @@ impl Shell {
             .child(panel)
     }
 
+    // The git window over the home, as the chat window comes.
+    fn git_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme();
+        let shell = cx.entity().downgrade();
+        let scrim = div()
+            .id("git-scrim")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .occlude()
+            .bg(theme.background.opacity(0.75))
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                shell
+                    .update(cx, |shell, cx| shell.close_git(window, cx))
+                    .ok();
+            });
+        let panel = div()
+            .id("git")
+            .absolute()
+            .top(px(32.))
+            .bottom(px(32.))
+            .left(px(48.))
+            .right(px(48.))
+            .occlude()
+            .overflow_hidden()
+            .rounded_lg()
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .child(self.git.clone());
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(scrim)
+            .child(panel)
+    }
+
+    // The branch of the project in front, and how many files changed in its repository; a
+    // click opens the git window.
+    fn git_item(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let repos = self.repos.read(cx);
+        let repo = match self.bench.read(cx).project() {
+            Some(project) => repos.repo_of(project),
+            None => repos.repos().first(),
+        }?;
+        let label = match repo.changes().len() {
+            0 => repo.branch().to_owned(),
+            n => format!("{} · {n}", repo.branch()),
+        };
+        let shell = cx.entity().downgrade();
+        Some(
+            Action::new("git", Glyph::GitBranch, "Git (Ctrl+Shift+G)")
+                .label(label)
+                .on_click(move |window, cx| {
+                    shell
+                        .update(cx, |shell, cx| shell.toggle_git(window, cx))
+                        .ok();
+                }),
+        )
+    }
+
     // The logos of the main languages of the shown project; a click lists them all, named.
     fn stack_item(&self, shares: &[Share], cx: &mut Context<Self>) -> impl IntoElement + use<> {
         const SHOWN: usize = 3;
@@ -709,6 +883,8 @@ impl Render for Shell {
             Some(self.overlay(cx).into_any_element())
         } else if self.chatting {
             Some(self.chat_overlay(cx).into_any_element())
+        } else if self.gitting {
+            Some(self.git_overlay(cx).into_any_element())
         } else {
             None
         };
@@ -754,6 +930,9 @@ impl Render for Shell {
                             .ok();
                     }),
             );
+        if let Some(item) = self.git_item(cx) {
+            status = status.item(item);
+        }
         if let Some(shares) = self
             .bench
             .read(cx)
@@ -771,6 +950,7 @@ impl Render for Shell {
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::on_show_code))
+            .on_action(cx.listener(Self::on_show_git))
             .on_action(cx.listener(Self::on_toggle_tree))
             .on_action(cx.listener(Self::on_dismiss))
             .size_full()

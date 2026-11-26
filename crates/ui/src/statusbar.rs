@@ -136,6 +136,7 @@ impl RenderOnce for Popup {
 pub struct Action {
     id: ElementId,
     glyph: Glyph,
+    label: Option<SharedString>,
     tip: SharedString,
     on_click: Option<Handler>,
 }
@@ -145,9 +146,16 @@ impl Action {
         Self {
             id: id.into(),
             glyph,
+            label: None,
             tip: tip.into(),
             on_click: None,
         }
+    }
+
+    // Words beside the icon.
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
     }
 
     pub fn on_click(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
@@ -159,6 +167,9 @@ impl Action {
 impl RenderOnce for Action {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let mut button = Ghost.style(Button::new(self.id).icon(self.glyph).tooltip(self.tip));
+        if let Some(label) = self.label {
+            button = button.label(label);
+        }
         if let Some(f) = self.on_click {
             button = button.on_click(move |_, window, cx| f(window, cx));
         }

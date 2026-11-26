@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use corvo_domain::{Node, Tree, Workbench};
+use corvo_ui::git::tint;
 use corvo_ui::notice;
 use corvo_ui::tree::{Event as TreeEvent, Item, Panel, Row, State};
 use gpui_kit::{
@@ -10,12 +11,16 @@ use gpui_kit::{
     SharedString, Subscription, Window,
 };
 
+use crate::repos::Repos;
+
 pub enum Event {
     Pick(PathBuf),
 }
 
 pub struct Files {
     bench: Entity<Workbench>,
+    // How each file and folder stands against the last commit, in its row's color.
+    repos: Entity<Repos>,
     state: Entity<State>,
     dirs: Rc<HashSet<SharedString>>,
     _subs: Vec<Subscription>,
@@ -24,11 +29,20 @@ pub struct Files {
 impl EventEmitter<Event> for Files {}
 
 impl Files {
-    pub fn new(bench: Entity<Workbench>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        bench: Entity<Workbench>,
+        repos: Entity<Repos>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let state = cx.new(|cx| State::new(cx));
-        let subs = vec![cx.subscribe_in(&state, window, Self::on_tree)];
+        let subs = vec![
+            cx.subscribe_in(&state, window, Self::on_tree),
+            cx.observe(&repos, |_, _, cx| cx.notify()),
+        ];
         let mut files = Self {
             bench,
+            repos,
             state,
             dirs: Rc::default(),
             _subs: subs,
@@ -103,18 +117,27 @@ impl Render for Files {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dirs = self.dirs.clone();
         let view = cx.entity().downgrade();
+        let repos = self.repos.clone();
 
-        Panel::new(&self.state, move |entry| {
+        Panel::new(&self.state, move |entry, cx| {
             let id = &entry.item().id;
-            if dirs.contains(id) {
-                return Row::dir(entry);
-            }
-            let view = view.clone();
             let path = PathBuf::from(id.as_ref());
-            Row::file(entry).on_click(move |_, _, cx| {
+            let change = repos.read(cx).change_of(&path);
+            let dir = dirs.contains(id);
+            let row = if dir {
+                Row::dir(entry)
+            } else {
+                let view = view.clone();
                 let path = path.clone();
-                view.update(cx, |_, cx| cx.emit(Event::Pick(path))).ok();
-            })
+                Row::file(entry).on_click(move |_, _, cx| {
+                    let path = path.clone();
+                    view.update(cx, |_, cx| cx.emit(Event::Pick(path))).ok();
+                })
+            };
+            match change {
+                Some(change) => Row::tint(row, tint(change, cx), !dir),
+                None => row,
+            }
         })
     }
 }

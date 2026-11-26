@@ -133,7 +133,7 @@ impl Render for Structure {
                 let spots = self.spots.clone();
                 let file = self.file.clone().unwrap_or_default();
                 let view = cx.entity().downgrade();
-                Panel::new(&self.state, move |entry| {
+                Panel::new(&self.state, move |entry, _| {
                     let id = &entry.item().id;
                     let Some(spot) = spots.get(id).copied() else {
                         return Row::file(entry);

@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use corvo_domain::Change;
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex};
@@ -11,6 +12,7 @@ use gpui_kit::{
 
 use crate::button::Button;
 use crate::file_icon::FileIcon;
+use crate::git::tint;
 
 type Pick = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 type Home = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -20,6 +22,7 @@ pub struct Item {
     id: SharedString,
     label: SharedString,
     dirty: bool,
+    change: Option<Change>,
 }
 
 impl Item {
@@ -28,7 +31,14 @@ impl Item {
             id: id.into(),
             label: label.into(),
             dirty,
+            change: None,
         }
+    }
+
+    // How the file stands against the last commit: its name takes the color of it.
+    pub fn change(mut self, change: Option<Change>) -> Self {
+        self.change = change;
+        self
     }
 }
 
@@ -84,7 +94,21 @@ impl RenderOnce for Bar {
         let tabs = self.items.into_iter().enumerate().map(|(ix, item)| {
             let close = on_close.clone();
             let name = item.label.clone();
-            let tab = Tab::new().label(item.label).suffix(
+            let tab = match item.change {
+                None => Tab::new().label(item.label),
+                Some(change) => {
+                    let color = tint(change, cx);
+                    Tab::new().child(
+                        div()
+                            .px_1()
+                            .rounded_sm()
+                            .bg(color.opacity(0.1))
+                            .text_color(color)
+                            .child(item.label),
+                    )
+                }
+            };
+            let tab = tab.suffix(
                 Button::ghost(ElementId::Name(format!("close:{}", item.id).into()))
                     .icon(IconName::Close)
                     .on_click(move |_, window, cx| {

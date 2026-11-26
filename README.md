@@ -14,7 +14,7 @@ corvo opens on the list of workspaces, where you add, remove or enter one. A wor
 
 Inside a workspace the window holds its home. The code comes over it, with the home dimmed behind: the open files in tabs, and on the right a sidebar with the file tree of a project (the one open in the home, or the one the active tab belongs to) over the structure of the active file (see Outline). A click on a file's card in the home opens it there, and so does a file picked in the tree; **×**, `Escape` or a click on the dimmed home puts the code away, its tabs kept for the next time. Closing the last tab leaves the code open, empty, with a note to pick a file in the tree. Projects are linked and unlinked from the home: the **Link folder…** button of the status bar links one, and right clicking a project card gives **Unlink**. Open tabs belong to the workspace, so switching projects only changes the tree.
 
-A status bar runs along the bottom of the window. On the left, the code button brings the code over the home with the tabs left open, or with none and a note to pick a file in the tree; with the code shown, it puts it away. Next to it, a button links a folder to the workspace, then the count of cards hidden from the home (see Home). On the right it shows the languages of the project open in the home, the logos of the three with the most files, in their brand colors (from [Simple Icons](https://simpleicons.org), CC0, in `crates/ui/assets/languages`; a color too dark for the dark theme is lifted); click it for all of them, each with its files and share. They are counted in the background when a project is opened in the home, from the extensions of its files, leaving out `node_modules`, `target`, `vendor`, `dist` and `build`; data, docs and settings (JSON, YAML, TOML, Markdown) are not counted as languages.
+A status bar runs along the bottom of the window. On the left, the code button brings the code over the home with the tabs left open, or with none and a note to pick a file in the tree; with the code shown, it puts it away. Next to it, a button links a folder to the workspace, then the count of cards hidden from the home (see Home), then the branch of the project in front and how many files changed in its repository, which opens the git window (see Git). On the right it shows the languages of the project open in the home, the logos of the three with the most files, in their brand colors (from [Simple Icons](https://simpleicons.org), CC0, in `crates/ui/assets/languages`; a color too dark for the dark theme is lifted); click it for all of them, each with its files and share. They are counted in the background when a project is opened in the home, from the extensions of its files, leaving out `node_modules`, `target`, `vendor`, `dist` and `build`; data, docs and settings (JSON, YAML, TOML, Markdown) are not counted as languages.
 
 corvo draws its own title bar: a back button to the workspace list, the workspace name, and the window controls the compositor supports (Hyprland has no minimize, so it only shows maximize and close). Leaving a workspace or closing the window is refused while a tab has unsaved changes.
 
@@ -54,18 +54,29 @@ The outline comes from tree-sitter (`crates/syntax`), with no language server ne
 
 ## Keys
 
-| Key            | Command                    | Scope  |
-| -------------- | -------------------------- | ------ |
-| `ctrl-s`       | Save                       | global |
-| `ctrl-z`       | Undo                       | editor |
-| `ctrl-y`       | Redo                       | editor |
-| `ctrl-space`   | Show completions           | editor |
-| `f12`          | Go to definition           | editor |
-| `ctrl-shift-e` | Open the code              | global |
-| `escape`       | Put the code away          | global |
-| `ctrl-b`       | Hide or show the file tree | global |
+| Key            | Command                               | Scope  |
+| -------------- | ------------------------------------- | ------ |
+| `ctrl-s`       | Save                                  | global |
+| `ctrl-z`       | Undo                                  | editor |
+| `ctrl-y`       | Redo                                  | editor |
+| `ctrl-space`   | Show completions                      | editor |
+| `f12`          | Go to definition                      | editor |
+| `ctrl-shift-e` | Open the code                         | global |
+| `ctrl-shift-g` | Open or close the git window          | global |
+| `escape`       | Put the code, chat or git window away | global |
+| `ctrl-b`       | Hide or show the file tree            | global |
 
 `ctrl-click` also goes to definition. Bindings live in `corvo_domain::keymap::Keymap` and reach GPUI through `corvo_ui::keys`.
+
+## Git
+
+corvo reads git as the dev has it installed (`crates/git`), with no optional locks, so it never stands in the way of the git run in a terminal or by an agent. Each linked project is read for the repository it is in, projects that share one sharing it: its branch, the commit it is on, and what changed since that commit, untracked files included. It is read again when a file is saved, when an agent's reply ends, when the window comes back in front, when the git window opens, and every 3 seconds while the window is in front.
+
+What changed takes a color: green for what is new (added or untracked), blue for what changed (modified or renamed), red for what is gone, amber for a conflict. A changed file shows it in the file tree, with a light fill behind its row, in its tab, and on its card in the home; a folder takes the color of the weightiest change under it, a conflict first, then a change to what was there, then something new.
+
+In the editor, the text as it is typed, saved or not, is set against the file in the last commit: a bar beside the line numbers marks the lines added (green) and changed (blue), with a light fill behind them, and a red mark sits where lines were taken out; ticks on the scrollbar show where each is. A file the last commit does not have shows all its lines as added, with no fill.
+
+The git window (`ctrl-shift-g`, or the branch in the status bar) takes turns with the code and the chats over the home. On the left, the changed files of each repository under its name, branch and count, each with its letter (`A`, `M`, `D`, `R`, `U`, `!`); on the right, the patch of the file picked, from the last commit to the file on disk. **Open**, or a double click on a file, opens it in the code.
 
 ## Language servers
 
