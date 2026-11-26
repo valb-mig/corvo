@@ -26,7 +26,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, ElementId, Entity, FocusHandle,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, PathPromptOptions,
-    Render, Styled as _, Subscription, Window, div, px, relative,
+    Render, Styled as _, Subscription, Window, div, px,
 };
 use lsp_types::Position;
 
@@ -41,7 +41,6 @@ use crate::pane::hidden::Hidden;
 use crate::pane::overview::{self, Overview};
 use crate::pane::scripts::{self, Scripts};
 use crate::pane::stack::Stack;
-use crate::pane::structure::{self, Structure};
 use crate::pane::terminals::Terminals;
 use crate::repos::{self, Repos};
 
@@ -55,11 +54,10 @@ pub struct Shell {
     id: Uuid,
     bench: Entity<Workbench>,
     hub: Entity<Hub>,
-    // The open files, over the home while shown, with the file tree and the active file's
-    // structure beside them.
+    // The open files, over the home while shown, with the file tree beside them, the active
+    // file's outline nested under its row.
     code: Entity<Code>,
     files: Entity<Files>,
-    structure: Entity<Structure>,
     home: Entity<Overview>,
     hidden: Entity<Hidden>,
     hiding: bool,
@@ -91,8 +89,8 @@ pub struct Shell {
     paletting: bool,
     before: Option<FocusHandle>,
     index: HashMap<PathBuf, Rc<Vec<PathBuf>>>,
-    // The panel floating on the right of the code, with the file tree over the active file's
-    // structure: opened and closed with ctrl-b or the button of the window's bar.
+    // The panel floating on the right of the code, with the file tree: opened and closed with
+    // ctrl-b or the button of the window's bar.
     panel: bool,
     _subs: Vec<Subscription>,
 }
@@ -120,7 +118,6 @@ impl Shell {
             cx.new(|cx| Code::new(bench.clone(), hub.clone(), home.clone(), repos.clone(), cx));
         let files = cx.new(|cx| Files::new(bench.clone(), repos.clone(), window, cx));
         let git = cx.new(|cx| GitWindow::new(repos.clone(), cx));
-        let structure = cx.new(|cx| Structure::new(bench.clone(), window, cx));
         let hidden = cx.new(|_| Hidden::new(bench.clone(), home.clone()));
         let stack = cx.new(|_| Stack::default());
 
@@ -173,7 +170,6 @@ impl Shell {
             cx.subscribe_in(&agents, window, Self::on_agents),
             cx.subscribe_in(&dock, window, Self::on_dock),
             cx.subscribe_in(&files, window, Self::on_files),
-            cx.subscribe_in(&structure, window, Self::on_structure),
             cx.subscribe_in(&code, window, Self::on_code),
             cx.subscribe_in(&home, window, Self::on_home),
             cx.subscribe_in(&git, window, Self::on_git),
@@ -211,8 +207,6 @@ impl Shell {
                 }
                 cx.notify();
             }),
-            // The structure card shows or goes with the active file.
-            cx.observe(&structure, |_, _, cx| cx.notify()),
         ];
 
         cx.spawn_in(window, async move |this, cx| {
@@ -258,7 +252,6 @@ impl Shell {
             hub,
             code,
             files,
-            structure,
             home,
             hidden,
             hiding: false,
@@ -416,7 +409,7 @@ impl Shell {
     // open to pick one.
     fn show_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.code.update(cx, |code, cx| code.show(window, cx));
-        // With no tab, the structure has no file to follow.
+        // With no tab, the outline has no file to follow.
         let active = self
             .bench
             .read(cx)
@@ -426,8 +419,11 @@ impl Shell {
         if active.is_none() {
             self.panel = true;
         }
-        self.structure.update(cx, |structure, cx| {
-            structure.follow(active.as_deref(), window, cx)
+        let line = active
+            .as_deref()
+            .and_then(|path| self.code.read(cx).line(path, cx));
+        self.files.update(cx, |files, cx| {
+            files.follow(active.as_deref(), line, window, cx)
         });
     }
 
@@ -856,18 +852,7 @@ impl Shell {
             files::Event::Pick(path) => {
                 self.code.update(cx, |code, cx| code.open(path, window, cx));
             }
-        }
-    }
-
-    fn on_structure(
-        &mut self,
-        _: &Entity<Structure>,
-        event: &structure::Event,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            structure::Event::Jump(path, line, column) => {
+            files::Event::Jump(path, line, column) => {
                 let at = Position::new(*line, *column);
                 self.code
                     .update(cx, |code, cx| code.reveal(path, Some(at), window, cx));
@@ -917,21 +902,26 @@ impl Shell {
                 if owner.is_some() && owner.as_deref() != self.bench.read(cx).project() {
                     self.show(owner, window, cx);
                 }
-                self.files
-                    .update(cx, |files, cx| files.reveal(path, window, cx));
-                self.structure
-                    .update(cx, |structure, cx| structure.follow(Some(path), window, cx));
+                let line = self.code.read(cx).line(path, cx);
+                self.files.update(cx, |files, cx| {
+                    files.follow(Some(path), line, window, cx);
+                    files.reveal(path, window, cx);
+                });
             }
             code::Event::Saved(path) => {
-                self.structure
-                    .update(cx, |structure, cx| structure.saved(path, window, cx));
+                self.files
+                    .update(cx, |files, cx| files.saved(path, window, cx));
                 self.repos.update(cx, |repos, cx| repos.refresh(cx));
             }
-            // The structure has no file left, the file tree opens to pick another, and the keys go
+            code::Event::Cursor(path, line) => {
+                self.files
+                    .update(cx, |files, cx| files.cursor(path, *line, cx));
+            }
+            // The outline has no file left, the file tree opens to pick another, and the keys go
             // back to the window.
             code::Event::Emptied => {
-                self.structure
-                    .update(cx, |structure, cx| structure.follow(None, window, cx));
+                self.files
+                    .update(cx, |files, cx| files.follow(None, None, window, cx));
                 self.panel = true;
                 self.rest(window, cx);
             }
@@ -976,21 +966,11 @@ impl Shell {
 }
 
 impl Shell {
-    // The code over the home: the tabs, and the panel floating on their right with the file tree
-    // over the active file's structure.
+    // The code over the home: the tabs, and the panel floating on their right with the file tree,
+    // the active file's outline nested under its row.
     fn overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        // A file whose language has no outline leaves the tree the whole panel.
         let panel = self.panel.then(|| {
-            let card = self.structure.read(cx).is_shown(cx).then(|| {
-                div()
-                    .flex_shrink_0()
-                    .h(relative(0.45))
-                    .p_2()
-                    .child(self.structure.clone())
-            });
-            Drawer::new("code-panel")
-                .child(div().flex_1().min_h_0().child(self.files.clone()))
-                .children(card)
+            Drawer::new("code-panel").child(div().flex_1().min_h_0().child(self.files.clone()))
         });
         let body = div()
             .relative()

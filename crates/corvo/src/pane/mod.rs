@@ -8,5 +8,4 @@ pub mod overview;
 pub mod screen;
 pub mod scripts;
 pub mod stack;
-pub mod structure;
 pub mod terminals;

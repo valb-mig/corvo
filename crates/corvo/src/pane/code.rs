@@ -24,6 +24,8 @@ const REMARK: Duration = Duration::from_millis(150);
 pub enum Event {
     Active(PathBuf),
     Saved(PathBuf),
+    // The cursor of the active file went to another line (0-based).
+    Cursor(PathBuf, u32),
     // The last tab was closed; the code stays shown, empty.
     Emptied,
     // Put away, back to the home.
@@ -59,6 +61,8 @@ pub struct Code {
     texts: HashMap<PathBuf, editor::Rope>,
     subs: HashMap<PathBuf, Vec<Subscription>>,
     marked: HashMap<PathBuf, Marked>,
+    // The line each file's cursor was last seen on.
+    lines: HashMap<PathBuf, u32>,
     _repos: Subscription,
 }
 
@@ -84,6 +88,7 @@ impl Code {
             texts: HashMap::new(),
             subs: HashMap::new(),
             marked: HashMap::new(),
+            lines: HashMap::new(),
             _repos: watch,
         }
     }
@@ -294,8 +299,23 @@ impl Code {
             this.sync(&key, event, cx);
         });
 
+        // The editor is told of every change of it, the cursor's blink too: only a new line
+        // is told on.
+        let key = path.to_path_buf();
+        let follow = cx.observe(&state, move |this, state, cx| {
+            let line = state.read(cx).cursor_position().line;
+            if this.lines.insert(key.clone(), line) == Some(line) {
+                return;
+            }
+            let tabs = this.bench.read(cx).tabs();
+            if tabs.active().is_some_and(|doc| doc.path() == key) {
+                cx.emit(Event::Cursor(key.clone(), line));
+            }
+        });
+
         self.texts.insert(path.to_path_buf(), rope);
-        self.subs.insert(path.to_path_buf(), vec![touch, sync]);
+        self.subs
+            .insert(path.to_path_buf(), vec![touch, sync, follow]);
         state
     }
 
@@ -356,6 +376,14 @@ impl Code {
         self.shown
     }
 
+    // The line (0-based) of a file's cursor, when it is open as text.
+    pub fn line(&self, path: &Path, cx: &App) -> Option<u32> {
+        match self.views.get(path)? {
+            View::Text(state) => Some(state.read(cx).cursor_position().line),
+            View::Image | View::Binary(_) => None,
+        }
+    }
+
     fn close(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.path_at(ix, cx) else {
             return;
@@ -367,6 +395,7 @@ impl Code {
         self.texts.remove(&path);
         self.subs.remove(&path);
         self.marked.remove(&path);
+        self.lines.remove(&path);
         if self.bench.read(cx).tabs().active().is_none() {
             cx.emit(Event::Emptied);
             cx.notify();
