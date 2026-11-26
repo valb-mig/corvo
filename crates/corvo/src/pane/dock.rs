@@ -486,8 +486,10 @@ impl Render for Dock {
         let attached = self.attached(cx);
         let theme = cx.theme();
         let ring = theme.ring;
+        // It floats over the panes: a click that misses its controls stops at the bar.
         let bar = v_flex()
             .id("agent-bar")
+            .occlude()
             .rounded(px(12.))
             .border_1()
             .border_color(theme.border)
