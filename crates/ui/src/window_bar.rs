@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex};
 use gpui_kit::{
     AnyElement, App, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
     RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div, px,
@@ -11,14 +11,23 @@ use gpui_kit::{
 type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 
 // The bar along the top of a window over the home: its icon and name on the left, its palette's
-// field in the middle, and the way back to the home, by Esc or the ×, on the right.
+// field in the middle, and on the right the button of its panel and the way back to the home,
+// by Esc or the ×.
 #[derive(IntoElement)]
 pub struct WindowBar {
     glyph: Glyph,
     title: SharedString,
     subtitle: Option<SharedString>,
     center: Option<AnyElement>,
+    panel: Option<Panel>,
     on_close: Option<Handler>,
+}
+
+// The button that opens and closes the panel floating on the right of the window.
+struct Panel {
+    open: bool,
+    tooltip: SharedString,
+    on_toggle: Handler,
 }
 
 impl WindowBar {
@@ -28,6 +37,7 @@ impl WindowBar {
             title: title.into(),
             subtitle: None,
             center: None,
+            panel: None,
             on_close: None,
         }
     }
@@ -44,6 +54,21 @@ impl WindowBar {
         self
     }
 
+    // The button of the window's panel, lit while the panel is open.
+    pub fn panel(
+        mut self,
+        open: bool,
+        tooltip: impl Into<SharedString>,
+        on_toggle: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.panel = Some(Panel {
+            open,
+            tooltip: tooltip.into(),
+            on_toggle: Rc::new(on_toggle),
+        });
+        self
+    }
+
     pub fn on_close(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_close = Some(Rc::new(f));
         self
@@ -54,6 +79,17 @@ impl RenderOnce for WindowBar {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
         let close = self.on_close;
+        let panel = self.panel.map(|panel| {
+            let toggle = panel.on_toggle;
+            Button::new("toggle-panel")
+                .ghost()
+                .small()
+                .icon(Glyph::PanelRight)
+                .selected(panel.open)
+                .toggled(panel.open)
+                .tooltip(panel.tooltip)
+                .on_click(move |_, window, cx| toggle(window, cx))
+        });
         // The sides take the same room, so the middle is the bar's middle.
         let left = h_flex()
             .flex_1()
@@ -79,6 +115,7 @@ impl RenderOnce for WindowBar {
             .flex_1()
             .justify_end()
             .gap_2()
+            .children(panel)
             .child(key("Esc", cx))
             .child(
                 Button::new("close-window")

@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod button;
+pub mod drawer;
 pub mod dropdown;
 pub mod editor;
 pub mod field;
