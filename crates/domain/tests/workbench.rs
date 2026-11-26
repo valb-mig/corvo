@@ -371,6 +371,7 @@ fn restore_brings_the_home_back_after_lines_move() {
         root: Some(PathBuf::from("/p")),
         open: vec![Node::dir("/p/src"), Node::file(&lib)],
         dives: vec![(lib.clone(), vec!["close".to_owned()])],
+        spread: vec![PathBuf::from("/p/src"), PathBuf::from("/q/src")],
         hidden: vec![(
             Mark::Symbol(lib.clone(), vec!["open".to_owned()]),
             "open".to_owned(),
@@ -389,6 +390,8 @@ fn restore_brings_the_home_back_after_lines_move() {
     assert_eq!(atlas.root(), Some(Path::new("/p")));
     assert!(atlas.is_open(&lib));
     assert!(atlas.is_dived(&lib, &[0]));
+    assert!(atlas.is_spread(Path::new("/p/src")));
+    assert!(!atlas.is_spread(Path::new("/q/src")));
     assert!(atlas.is_hidden(&Place::Symbol(lib.clone(), vec![1])));
 }
 

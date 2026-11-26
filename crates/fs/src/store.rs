@@ -40,6 +40,8 @@ struct Home {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     dives: Vec<Dived>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    spread: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     hidden: Vec<Hidden>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     nudges: BTreeMap<String, [f32; 2]>,
@@ -100,6 +102,7 @@ impl From<Home> for Arrangement {
                 .into_iter()
                 .map(|dived| (dived.file, dived.trail))
                 .collect(),
+            spread: home.spread,
             hidden: home
                 .hidden
                 .into_iter()
@@ -149,6 +152,7 @@ impl From<&Arrangement> for Home {
                     trail: trail.clone(),
                 })
                 .collect(),
+            spread: home.spread.clone(),
             hidden: home
                 .hidden
                 .iter()

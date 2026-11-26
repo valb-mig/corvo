@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use corvo_ui::graph::{
-    GAP, HEIGHT, PAD, RIM, SPAN, Shape, Spot, TITLE, View, WIDTH, ZOOM_MIN, fit, frame, heads,
-    hull, layout, span, touches,
+    BLOCK, CHIP, GAP, HEIGHT, PAD, RIM, SPAN, Shape, Spot, TITLE, View, WIDTH, ZOOM_MIN, fit,
+    frame, heads, hull, layout, span, touches,
 };
 use gpui_kit::SharedString;
 
@@ -11,6 +11,7 @@ fn card(children: Vec<Shape>) -> Shape {
         size: (WIDTH, HEIGHT),
         open: !children.is_empty(),
         children,
+        ..Shape::default()
     }
 }
 
@@ -82,6 +83,7 @@ fn a_dropped_card_widens_its_column_and_pushes_the_cards_under_it() {
         size: (600., HEIGHT + 300.),
         open: true,
         children: vec![leaf()],
+        ..Shape::default()
     };
     let layout = layout(&[card(vec![open, leaf()])]);
 
@@ -89,6 +91,40 @@ fn a_dropped_card_widens_its_column_and_pushes_the_cards_under_it() {
     assert_eq!(dropped.children[0].y, dropped.y);
     assert_eq!(under.y, dropped.y + HEIGHT + 300. + GAP);
     assert_eq!(dropped.children[0].x, dropped.x + 600. + SPAN);
+}
+
+#[test]
+fn a_block_starts_further_down_than_a_card_would() {
+    let apart = Shape {
+        apart: true,
+        ..leaf()
+    };
+    let layout = layout(&[card(vec![leaf(), apart.clone(), leaf()])]);
+
+    let kids = &layout.roots[0].children;
+    assert_eq!(kids[1].y, kids[0].y + HEIGHT + BLOCK);
+    assert_eq!(kids[2].y, kids[1].y + HEIGHT + GAP);
+    // The first card of a column has nothing above it to stand apart from.
+    let alone = layout_of(vec![apart, leaf()]);
+    assert_eq!(alone.children[0].y, PAD);
+}
+
+#[test]
+fn a_card_sits_level_with_what_it_holds_but_not_with_a_chip_trailing_it() {
+    let chip = Shape {
+        size: (WIDTH, CHIP),
+        trails: true,
+        ..Shape::default()
+    };
+    let root = layout_of(vec![leaf(), leaf(), chip]);
+
+    let kids = &root.children;
+    assert_eq!(header(&root), (kids[0].y + kids[1].y + HEIGHT) / 2.);
+    assert_eq!(kids[2].y, kids[1].y + HEIGHT + GAP);
+}
+
+fn layout_of(children: Vec<Shape>) -> Spot {
+    layout(&[card(children)]).roots.remove(0)
 }
 
 #[test]

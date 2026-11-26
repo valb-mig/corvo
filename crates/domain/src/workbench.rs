@@ -185,6 +185,9 @@ impl Workbench {
                     self.atlas.dive(file, &at);
                 }
             }
+            for dir in left.spread.iter().filter(|dir| dir.starts_with(root)) {
+                self.atlas.spread(dir);
+            }
         }
         for (mark, name) in &left.hidden {
             let place = match mark {

@@ -3,15 +3,16 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use corvo_domain::server::Registry;
-use corvo_domain::{Atlas, Group, Moved, Node, Place, Workbench, stack};
+use corvo_domain::{Atlas, Group, Item, Moved, Node, Pile, Place, Workbench, column, stack};
 use corvo_ui::file_icon::{FileIcon, FolderIcon};
 use corvo_ui::git::tint;
 use corvo_ui::graph::{self, Branch, Camera, Card, Graph};
 use corvo_ui::{field, notice};
 use gpui_kit::assets::IconName as Glyph;
+use gpui_kit::component::Icon;
 use gpui_kit::{
     App, AppContext as _, Context, Entity, EventEmitter, IntoElement, Render, SharedString,
-    Subscription, WeakEntity, Window,
+    Styled as _, Subscription, WeakEntity, Window,
 };
 
 use crate::repos::Repos;
@@ -33,6 +34,9 @@ pub enum Event {
 enum Act {
     Isolate(Option<PathBuf>),
     Toggle(Node),
+    // A crowded folder shows all its files, or piles them back.
+    Spread(PathBuf),
+    Pile(PathBuf),
     Hide(Place, String),
     // One hidden card back, or all of them.
     Show(Option<Place>),
@@ -126,6 +130,8 @@ impl Overview {
             match act {
                 Act::Isolate(root) => return bench.isolate(root.as_deref()),
                 Act::Toggle(node) => return bench.toggle(node),
+                Act::Spread(dir) => bench.atlas_mut().spread(dir),
+                Act::Pile(dir) => bench.atlas_mut().pile(dir),
                 Act::Hide(place, name) => bench.hide(place.clone(), name),
                 Act::Show(place) => bench.show_hidden(place.as_ref()),
                 Act::HideMany(places) => {
@@ -252,12 +258,14 @@ impl Overview {
             .children(self.entries(atlas, root, view, cx))
     }
 
+    // What a folder holds, as shown: its folders, then its files changed in git, then the rest,
+    // each block a little apart; a crowded folder piles the rest until it is spread out.
     fn entries(&self, atlas: &Atlas, dir: &Path, view: &WeakEntity<Self>, cx: &App) -> Vec<Branch> {
         let children = atlas.children(dir).unwrap_or_default();
         if children.is_empty() {
             return vec![note(dir, "Empty folder")];
         }
-        let shown: Vec<Branch> = children
+        let shown: Vec<Node> = children
             .iter()
             .filter(|node| {
                 shown(
@@ -266,12 +274,28 @@ impl Overview {
                     &id(node.path()),
                 )
             })
-            .map(|node| self.node(atlas, node, view, cx))
+            .cloned()
             .collect();
         if shown.is_empty() {
             return vec![note(dir, "All hidden")];
         }
-        shown
+        let repos = self.repos.read(cx);
+        let changed = |node: &Node| repos.change_of(node.path()).is_some();
+        let column = column(&shown, changed, atlas.is_spread(dir));
+        let mut branches = Vec::new();
+        for block in column.blocks {
+            for (ix, item) in block.into_iter().enumerate() {
+                let branch = match item {
+                    Item::Node(node) => self.node(atlas, &node, view, cx),
+                    Item::Pile(pile) => piled(dir, &pile, view),
+                };
+                branches.push(branch.apart(ix == 0));
+            }
+        }
+        if let Some(count) = column.spread {
+            branches.push(fold(dir, count, view));
+        }
+        branches
     }
 
     // Only a folder opens on the home; a file opens in the code.
@@ -435,6 +459,32 @@ fn run(act: Act, view: &WeakEntity<Overview>) -> impl Fn(&mut Window, &mut App) 
 
 fn clicks(card: Card, act: Act, view: &WeakEntity<Overview>) -> Card {
     card.on_click(run(act, view))
+}
+
+// A pile of the files of one kind in a crowded folder; a click shows them all.
+fn piled(dir: &Path, pile: &Pile, view: &WeakEntity<Overview>) -> Branch {
+    let files = pile.files();
+    let first = files
+        .first()
+        .map(|file| file.name().to_owned())
+        .unwrap_or_default();
+    let title = format!("{} {} files", files.len(), pile.kind());
+    let card = Card::new(format!("pile:{}:{}", dir.display(), pile.kind()), title)
+        .icon(move |size| FileIcon::new(first.clone()).size(size))
+        .meta("Show all")
+        .pile();
+    Branch::new(clicks(card, Act::Spread(dir.to_path_buf()), view))
+}
+
+// The chip at the end of a crowded folder spread out, which piles its files back.
+fn fold(dir: &Path, count: usize, view: &WeakEntity<Overview>) -> Branch {
+    let card = Card::new(
+        format!("fold:{}", dir.display()),
+        format!("Collapse {count} files"),
+    )
+    .icon(|size| Icon::new(Glyph::ChevronUp).size(size))
+    .chip();
+    Branch::new(clicks(card, Act::Pile(dir.to_path_buf()), view))
 }
 
 fn unlinkable(card: Card, project: &Path, view: &WeakEntity<Overview>) -> Card {

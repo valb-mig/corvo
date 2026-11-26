@@ -57,6 +57,7 @@ fn keeps_how_the_home_was_left() {
         root: Some(PathBuf::from("/p")),
         open: vec![Node::dir("/p/src"), Node::file(&lib)],
         dives: vec![(lib.clone(), vec!["Blobs".to_owned()])],
+        spread: vec![PathBuf::from("/p/src")],
         hidden: vec![
             (Mark::Node(PathBuf::from("/p/docs")), "docs".to_owned()),
             (

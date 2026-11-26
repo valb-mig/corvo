@@ -16,7 +16,8 @@ use gpui_kit::{
 };
 
 // Cards as a tree read left to right: an open card holds its cards in the next column, with a
-// curve to each, and any number of cards can be open at once. A card can drop a panel down from
+// curve to each, and any number of cards can be open at once. A column can come in blocks, a
+// little apart, and end in a chip; a card can stand for a pile, with sheets under it. A card can drop a panel down from
 // under its header; its column widens to hold it. Cards can be picked, with Ctrl or Shift on a
 // click or a box drawn with Shift, to group or hide them together; a group is a frame around its
 // cards, or one card in their place when collapsed.
@@ -31,9 +32,16 @@ pub const ZOOM_MAX: f32 = 2.;
 // The room a group's frame leaves around its cards, and the height of its title.
 pub const RIM: f32 = 12.;
 pub const TITLE: f32 = 28.;
+// The room between blocks of a column, how far the sheets of a pile show under it, and the
+// height of a chip.
+pub const BLOCK: f32 = 22.;
+pub const SHEETS: f32 = 10.;
+pub const CHIP: f32 = 28.;
 
 const ICON: f32 = 16.;
 const STEP: f32 = 1.2;
+// The hover group of the top of a pile.
+const PILE: &str = "graph-pile";
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 type Draw = Box<dyn Fn(Pixels) -> AnyElement>;
@@ -56,6 +64,17 @@ pub struct Card {
     on_click: Option<Handler>,
     actions: Vec<Action>,
     drop: Option<Drop>,
+    form: Form,
+}
+
+// How a card is drawn: plain, as the top of a pile with its sheets under it, or as a chip at the
+// end of its column, with no curve to it and its holder not sitting level with it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Form {
+    #[default]
+    Plain,
+    Pile,
+    Chip,
 }
 
 // An entry of the menu a right click on the card opens.
@@ -85,6 +104,7 @@ impl Card {
             on_click: None,
             actions: Vec::new(),
             drop: None,
+            form: Form::Plain,
         }
     }
 
@@ -154,10 +174,26 @@ impl Card {
         self
     }
 
+    // Drawn as the top of a pile. Neither a pile nor a chip can be picked.
+    pub fn pile(mut self) -> Self {
+        self.form = Form::Pile;
+        self.selectable = false;
+        self
+    }
+
+    // Drawn as a chip at the end of its column: its icon and title, a click doing what it says.
+    pub fn chip(mut self) -> Self {
+        self.form = Form::Chip;
+        self.selectable = false;
+        self
+    }
+
     fn size(&self) -> (f32, f32) {
-        match &self.drop {
-            Some(drop) => (drop.width.max(WIDTH), HEIGHT + drop.height),
-            None => (WIDTH, HEIGHT),
+        match (&self.drop, self.form) {
+            (Some(drop), _) => (drop.width.max(WIDTH), HEIGHT + drop.height),
+            (None, Form::Pile) => (WIDTH, HEIGHT + SHEETS),
+            (None, Form::Chip) => (WIDTH, CHIP),
+            (None, Form::Plain) => (WIDTH, HEIGHT),
         }
     }
 }
@@ -243,6 +279,7 @@ impl Group {
             on_click: self.on_click,
             actions: self.actions,
             drop: None,
+            form: Form::Plain,
         }
     }
 }
@@ -251,6 +288,7 @@ impl Group {
 pub struct Branch {
     card: Card,
     open: bool,
+    apart: bool,
     children: Vec<Branch>,
 }
 
@@ -259,6 +297,7 @@ impl Branch {
         Self {
             card,
             open: false,
+            apart: false,
             children: Vec::new(),
         }
     }
@@ -268,17 +307,26 @@ impl Branch {
         self
     }
 
+    // Starts a block of its column, a little apart from the cards above it.
+    pub fn apart(mut self, apart: bool) -> Self {
+        self.apart = apart;
+        self
+    }
+
     pub fn children(mut self, children: impl IntoIterator<Item = Branch>) -> Self {
         self.children.extend(children);
         self
     }
 }
 
-// A branch as the size of its card, whether it is open, and what it holds.
-#[derive(Clone, Debug, PartialEq)]
+// A branch as the size of its card, whether it is open, and what it holds; whether it starts a
+// block of its column, and whether it trails the column, as a chip does.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shape {
     pub size: (f32, f32),
     pub open: bool,
+    pub apart: bool,
+    pub trails: bool,
     pub children: Vec<Shape>,
 }
 
@@ -298,9 +346,9 @@ pub struct Layout {
 }
 
 // Every depth is a column as wide as its widest card. A card sits halfway between the first and
-// the last card it holds, and each branch takes the height of all it holds, so the cards around it
-// make room and nothing overlaps however much is open. The roots stack down the first column the
-// same way.
+// the last card it holds, past any that trail, and each branch takes the height of all it holds,
+// so the cards around it make room and nothing overlaps however much is open. A block starts
+// further down than a card would. The roots stack down the first column the same way.
 pub fn layout(roots: &[Shape]) -> Layout {
     let mut widths = Vec::new();
     for root in roots {
@@ -351,13 +399,23 @@ fn place(shape: &Shape, depth: usize, top: f32, lefts: &[f32]) -> (Spot, f32) {
     // What it holds stacks down from `top`, each branch past the one before.
     let mut low = top;
     let mut children = Vec::with_capacity(shape.children.len());
-    for child in &shape.children {
+    for (ix, child) in shape.children.iter().enumerate() {
+        if ix > 0 && child.apart {
+            low += BLOCK - GAP;
+        }
         let (spot, bottom) = place(child, depth + 1, low, lefts);
         children.push(spot);
         low = bottom + GAP;
     }
-    // The card sits halfway between the first card it holds and the last.
-    let y = (children[0].y + children[children.len() - 1].y) / 2.;
+    // The card sits halfway between the first card it holds and the last that doesn't trail.
+    let mut level = children
+        .iter()
+        .zip(&shape.children)
+        .filter(|(_, child)| !child.trails)
+        .map(|(spot, _)| spot.y);
+    let first = level.next().unwrap_or(children[0].y);
+    let last = level.next_back().unwrap_or(first);
+    let y = (first + last) / 2.;
     let bottom = (y + shape.size.1).max(low - GAP);
     (Spot { x, y, children }, bottom)
 }
@@ -1004,14 +1062,17 @@ impl RenderOnce for Graph {
             }
         }
 
-        // A curve from a card's header to the header of each card it holds, lit to the open ones;
-        // one to a collapsed group from each card holding some of its cards.
+        // A curve from a card's header to the header of each card it holds, lit to the open ones,
+        // but none to a chip; one to a collapsed group from each card holding some of its cards.
         let mut edges = Vec::new();
         let mut joined = HashSet::new();
         for (ix, card) in placed.iter().enumerate() {
             let Some(hx) = card.holder.filter(|hx| tucked[*hx].is_none()) else {
                 continue;
             };
+            if card.card.form == Form::Chip {
+                continue;
+            }
             let holder = &placed[hx];
             let from = (holder.at.0 + holder.size.0, holder.at.1 + HEIGHT / 2.);
             match tucked[ix] {
@@ -1046,7 +1107,19 @@ impl RenderOnce for Graph {
                 continue;
             }
             let (x, y) = view.at(card.at);
-            let frame = (x, y, card.size.0 * zoom, card.size.1 * zoom);
+            let height = match card.card.form {
+                Form::Chip => {
+                    cards.push(chip_element(card.card, (x, y), zoom, cx));
+                    continue;
+                }
+                // The sheets go under the top of the pile, which is a card's height.
+                Form::Pile => {
+                    cards.extend(sheets((x, y), zoom, cx));
+                    HEIGHT
+                }
+                Form::Plain => card.size.1,
+            };
+            let frame = (x, y, card.size.0 * zoom, height * zoom);
             let look = Look {
                 open: card.open,
                 picked: camera.is_picked(&card.card.id),
@@ -1263,6 +1336,8 @@ fn shape(branch: &Branch) -> Shape {
     Shape {
         size: branch.card.size(),
         open: branch.open,
+        apart: branch.apart,
+        trails: branch.card.form == Form::Chip,
         children: branch.children.iter().map(shape).collect(),
     }
 }
@@ -1390,6 +1465,8 @@ fn card_element(
         None => theme.foreground,
     };
     let head_id = ElementId::Name(format!("{}:head", card.id).into());
+    let pile = card.form == Form::Pile;
+    let blue = theme.blue;
     let clickable = card.on_click.is_some();
     let selectable = card.selectable;
     let grab = (hands.camera.clone(), card.id.clone());
@@ -1426,10 +1503,26 @@ fn card_element(
                         .text_color(title)
                         .child(card.title),
                 )
-                .children(
-                    card.meta
-                        .map(|meta| div().truncate().text_xs().text_color(muted).child(meta)),
-                ),
+                .children(card.meta.map(|meta| {
+                    // The top of a pile says what a click on it does, with a chevron.
+                    if !pile {
+                        return div()
+                            .truncate()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(meta)
+                            .into_any_element();
+                    }
+                    h_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .group_hover(PILE, move |style| style.text_color(blue))
+                        .child(div().truncate().child(meta))
+                        .child(Icon::new(Glyph::ChevronDown).size(px(12. * zoom)))
+                        .into_any_element()
+                })),
         )
         .children(
             card.badge
@@ -1497,8 +1590,63 @@ fn card_element(
         .when(clickable && !look.open && !look.picked, |el| {
             el.hover(move |style| style.border_color(muted))
         })
+        .when(pile, |el| el.group(PILE).shadow_md())
         .child(head)
         .children(drop)
+        .into_any_element()
+}
+
+// The two sheets showing under the top of a pile, each a little lighter than the card, the
+// lower one narrower.
+fn sheets((x, y): (f32, f32), zoom: f32, cx: &App) -> [AnyElement; 2] {
+    let theme = cx.theme();
+    let sheet = |down: f32, inset: f32, bg: Hsla| {
+        div()
+            .absolute()
+            .left(px(x + inset * zoom))
+            .top(px(y + down * zoom))
+            .w(px((WIDTH - 2. * inset) * zoom))
+            .h(px(HEIGHT * zoom))
+            .rounded_lg()
+            .border_1()
+            .border_color(theme.border)
+            .bg(bg)
+            .into_any_element()
+    };
+    let lift = |by: f32| theme.sidebar.blend(theme.foreground.opacity(by));
+    [
+        sheet(SHEETS, 12., lift(0.02)),
+        sheet(SHEETS / 2., 6., lift(0.05)),
+    ]
+}
+
+// A chip at the end of a column: its icon and title in a dashed pill. A press on it neither
+// moves the graph nor picks anything.
+fn chip_element(card: Card, (x, y): (f32, f32), zoom: f32, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    let (muted, fg, hover) = (theme.muted_foreground, theme.foreground, theme.sidebar);
+    h_flex()
+        .id(ElementId::Name(card.id))
+        .absolute()
+        .left(px(x))
+        .top(px(y))
+        .h(px(CHIP * zoom))
+        .px_3()
+        .gap_1p5()
+        .rounded_full()
+        .border_1()
+        .border_dashed()
+        .border_color(theme.border)
+        .text_xs()
+        .text_color(muted)
+        .cursor_pointer()
+        .hover(move |style| style.text_color(fg).border_color(muted).bg(hover))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .children(card.icon.map(|draw| draw(px(12. * zoom))))
+        .child(card.title)
+        .when_some(card.on_click, |el, f| {
+            el.on_click(move |_, window, cx| f(window, cx))
+        })
         .into_any_element()
 }
 

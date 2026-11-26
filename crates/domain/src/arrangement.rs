@@ -4,14 +4,15 @@ use std::path::PathBuf;
 use crate::Node;
 
 // How the home of a workspace was left, to come back to it the same: the project standing alone,
-// the folders, files and symbols open, the cards hidden, where cards were moved by hand, and the
-// groups made of them. A symbol is kept by its trail, the names that lead to it through the
+// the folders, files and symbols open, the crowded folders spread out, the cards hidden, where
+// cards were moved by hand, and the groups made of them. A symbol is kept by its trail, the names that lead to it through the
 // outline, so it is found again after its lines move.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Arrangement {
     pub root: Option<PathBuf>,
     pub open: Vec<Node>,
     pub dives: Vec<(PathBuf, Vec<String>)>,
+    pub spread: Vec<PathBuf>,
     pub hidden: Vec<(Mark, String)>,
     pub nudges: BTreeMap<String, (f32, f32)>,
     pub groups: Vec<Group>,

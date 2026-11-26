@@ -50,6 +50,36 @@ fn closing_a_folder_closes_what_is_open_inside_it() {
 }
 
 #[test]
+fn a_crowded_folder_spreads_out_until_piled_back_or_closed() {
+    let mut atlas = atlas();
+    let (src, deep) = (Path::new("/p/src"), Path::new("/p/src/deep"));
+    atlas.open(Node::dir(src));
+    atlas.open(Node::dir(deep));
+    atlas.spread(src);
+    atlas.spread(deep);
+
+    atlas.pile(src);
+    assert!(!atlas.is_spread(src));
+    assert!(atlas.is_spread(deep));
+
+    atlas.spread(src);
+    atlas.close(src);
+    assert!(!atlas.is_spread(src));
+    assert!(!atlas.is_spread(deep));
+}
+
+#[test]
+fn the_arrangement_keeps_the_folders_spread_out() {
+    let mut atlas = atlas();
+    atlas.spread(Path::new("/p/src"));
+
+    assert_eq!(atlas.arrangement().spread, vec![PathBuf::from("/p/src")]);
+
+    atlas.isolate(Some(Path::new("/p")));
+    assert!(atlas.arrangement().spread.is_empty());
+}
+
+#[test]
 fn surfacing_a_symbol_closes_the_symbols_open_inside_it() {
     let mut atlas = atlas();
     let lib = Path::new("/p/src/lib.rs");

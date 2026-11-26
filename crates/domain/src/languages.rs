@@ -53,6 +53,16 @@ const LANGUAGES: &[(&[&str], &str)] = &[
     (&["hs"], "Haskell"),
 ];
 
+// The language a file is written in, by its extension.
+pub fn language(name: &str) -> Option<&'static str> {
+    let (_, ext) = name.rsplit_once('.')?;
+    let ext = ext.to_ascii_lowercase();
+    LANGUAGES
+        .iter()
+        .find(|(exts, _)| exts.contains(&ext.as_str()))
+        .map(|(_, name)| *name)
+}
+
 // Most files first; a tie goes by name.
 pub fn languages(fs: &dyn Fs, root: &Path) -> Vec<Share> {
     let mut counts: HashMap<usize, usize> = HashMap::new();

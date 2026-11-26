@@ -7,8 +7,9 @@ use crate::{Node, Symbol, symbol};
 
 // The home of a workspace: its projects, or one project isolated as the root, with any number
 // of its folders and files open at once. An open folder shows what it holds, an open file its
-// outline, and an open symbol the symbols inside it. A symbol is known by its file and the
-// indexes that lead to it through the outline. Any card can be hidden, and stays hidden until
+// outline, and an open symbol the symbols inside it. A crowded folder piles its files until it
+// is spread out. A symbol is known by its file and the indexes that lead to it through the
+// outline. Any card can be hidden, and stays hidden until
 // shown again, whatever is isolated or open. Cards moved by hand keep how far they were moved, and
 // cards can be put together in groups; both are known by the key the home gives each card.
 
@@ -24,6 +25,7 @@ pub struct Atlas {
     root: Option<PathBuf>,
     open: BTreeMap<PathBuf, Node>,
     dives: BTreeSet<(PathBuf, Vec<usize>)>,
+    spread: BTreeSet<PathBuf>,
     // What is hidden, with its name to tell it by and how it is kept between runs.
     hidden: BTreeMap<Place, (String, Option<Mark>)>,
     nudges: BTreeMap<String, (f32, f32)>,
@@ -58,16 +60,19 @@ impl Atlas {
         self.root = root.map(Path::to_path_buf);
         self.open.clear();
         self.dives.clear();
+        self.spread.clear();
     }
 
     pub fn open(&mut self, node: Node) {
         self.open.insert(node.path().to_path_buf(), node);
     }
 
-    // Closes a folder or file with everything open inside it.
+    // Closes a folder or file with everything open inside it; folders spread out in there pile
+    // up again.
     pub fn close(&mut self, path: &Path) {
         self.open.retain(|open, _| !open.starts_with(path));
         self.dives.retain(|(file, _)| !file.starts_with(path));
+        self.spread.retain(|dir| !dir.starts_with(path));
     }
 
     pub fn is_open(&self, path: &Path) -> bool {
@@ -76,6 +81,20 @@ impl Atlas {
 
     pub fn opened(&self) -> impl Iterator<Item = &Node> {
         self.open.values()
+    }
+
+    // Shows every file of a crowded folder, out of its piles.
+    pub fn spread(&mut self, dir: &Path) {
+        self.spread.insert(dir.to_path_buf());
+    }
+
+    // Puts the files of a crowded folder back in their piles.
+    pub fn pile(&mut self, dir: &Path) {
+        self.spread.remove(dir);
+    }
+
+    pub fn is_spread(&self, dir: &Path) -> bool {
+        self.spread.contains(dir)
     }
 
     // Hides a card, closing it first with everything open inside.
@@ -261,6 +280,7 @@ impl Atlas {
             root: self.root.clone(),
             open: self.open.values().cloned().collect(),
             dives,
+            spread: self.spread.iter().cloned().collect(),
             hidden,
             nudges: self.nudges.clone(),
             groups: self.groups.clone(),
