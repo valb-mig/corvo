@@ -6,7 +6,7 @@ use corvo_domain::server::Registry;
 use corvo_domain::{Chats, Share, Workbench, Workspaces, agents, languages};
 use corvo_fs::{JsonChats, LocalFs};
 use corvo_lsp::{Hub, Note};
-use corvo_ui::keys::{Dismiss, Save, ShowCode};
+use corvo_ui::keys::{Dismiss, Save, ShowCode, ToggleTree};
 use corvo_ui::language_icon::LanguageIcon;
 use corvo_ui::notice;
 use corvo_ui::statusbar::{Action, Popup, StatusBar};
@@ -16,7 +16,7 @@ use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
     MouseButton, ParentElement as _, PathPromptOptions, Render, Styled as _, Subscription, Window,
-    div, px, relative,
+    div, prelude::FluentBuilder as _, px, relative,
 };
 use lsp_types::Position;
 
@@ -55,6 +55,8 @@ pub struct Shell {
     dock: Entity<Dock>,
     chats: Entity<ChatWindow>,
     chatting: bool,
+    // The file tree beside the code, hidden with ctrl-b.
+    tree: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -169,6 +171,7 @@ impl Shell {
             dock,
             chats,
             chatting: false,
+            tree: true,
             _subs: subs,
         };
         let first = root.clone().or_else(|| shell.linked(cx).into_iter().next());
@@ -290,6 +293,15 @@ impl Shell {
     fn on_show_code(&mut self, _: &ShowCode, window: &mut Window, cx: &mut Context<Self>) {
         if !self.code.read(cx).is_shown() {
             self.show_code(window, cx);
+        }
+    }
+
+    fn on_toggle_tree(&mut self, _: &ToggleTree, _: &mut Window, cx: &mut Context<Self>) {
+        if self.code.read(cx).is_shown() {
+            self.tree = !self.tree;
+            cx.notify();
+        } else {
+            cx.propagate();
         }
     }
 
@@ -565,13 +577,32 @@ impl Shell {
     // on the right with the file tree over the active file's structure. A click on the dimmed home
     // puts it away.
     fn overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        // A file whose language has no outline leaves the tree the whole sidebar.
+        // A file whose language has no outline leaves the tree the whole sidebar, and the tree
+        // hidden leaves it the structure; with neither, there is no sidebar.
+        let tree = self.tree;
         let card = self.structure.read(cx).is_shown(cx).then(|| {
             div()
-                .flex_shrink_0()
-                .h(relative(0.45))
+                .map(|el| {
+                    if tree {
+                        el.flex_shrink_0().h(relative(0.45))
+                    } else {
+                        el.flex_1().min_h_0()
+                    }
+                })
                 .p_2()
                 .child(self.structure.clone())
+        });
+        let files = tree.then(|| div().flex_1().min_h_0().child(self.files.clone()));
+        let side = (files.is_some() || card.is_some()).then(|| {
+            v_flex()
+                .w(px(280.))
+                .h_full()
+                .flex_shrink_0()
+                .border_l_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().sidebar)
+                .children(files)
+                .children(card)
         });
         let theme = cx.theme();
         let shell = cx.entity().downgrade();
@@ -600,17 +631,7 @@ impl Shell {
             .border_color(theme.border)
             .bg(theme.background)
             .child(div().flex_1().min_w_0().h_full().child(self.code.clone()))
-            .child(
-                v_flex()
-                    .w(px(280.))
-                    .h_full()
-                    .flex_shrink_0()
-                    .border_l_1()
-                    .border_color(theme.border)
-                    .bg(theme.sidebar)
-                    .child(div().flex_1().min_h_0().child(self.files.clone()))
-                    .children(card),
-            );
+            .children(side);
         div()
             .absolute()
             .top_0()
@@ -747,6 +768,7 @@ impl Render for Shell {
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::on_show_code))
+            .on_action(cx.listener(Self::on_toggle_tree))
             .on_action(cx.listener(Self::on_dismiss))
             .size_full()
             .child(

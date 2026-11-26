@@ -22,6 +22,14 @@ fn ctrl_shift_e_shows_the_code_from_anywhere() {
 }
 
 #[test]
+fn ctrl_b_toggles_the_tree_from_anywhere() {
+    let keymap = Keymap::default();
+    let toggle = keymap.bindings().iter().find(|b| b.chord() == "ctrl-b");
+    assert_eq!(toggle.map(Binding::command), Some(Command::ToggleTree));
+    assert_eq!(toggle.map(Binding::scope), Some(Scope::Global));
+}
+
+#[test]
 fn bind_replaces_same_chord_in_same_scope() {
     let mut keymap = Keymap::default();
     keymap.bind(Binding::new("ctrl-z", Command::Redo, Scope::Editor));
