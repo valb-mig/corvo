@@ -15,8 +15,10 @@ corvo-git = { path = "crates/git" }
 corvo-ui = { path = "crates/ui" }
 corvo-lsp = { path = "crates/lsp" }
 corvo-syntax = { path = "crates/syntax" }
+corvo-terminal = { path = "crates/terminal" }
 gpui-kit = { version = "0.10", default-features = false }
 agent-client-protocol-schema = { version = "1.22", default-features = false }
+alacritty_terminal = { version = "0.26", default-features = false }
 ignore = "0.4"
 anyhow = "1"
 base64 = "0.22"
