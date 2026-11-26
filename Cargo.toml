@@ -19,6 +19,7 @@ gpui-kit = { version = "0.10", default-features = false }
 agent-client-protocol-schema = { version = "1.22", default-features = false }
 ignore = "0.4"
 anyhow = "1"
+base64 = "0.22"
 futures = "0.3"
 libc = "0.2"
 lsp-server = "0.10"

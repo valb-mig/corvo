@@ -5,7 +5,8 @@ use std::rc::Rc;
 
 use corvo_domain::port::ChatStore;
 use corvo_domain::{
-    Answer, Ask, Chat, Chats, Diff, End, Entry, Pick, Status, Step, StepKind, Uuid, ago,
+    Answer, Ask, Chat, Chats, Diff, End, Entry, Message, Pick, Status, Step, StepKind, Uuid, ago,
+    image_mime,
 };
 
 fn chat() -> Chat {
@@ -36,6 +37,57 @@ fn first_message_names_the_chat() {
     chat.ask("outra coisa", 130);
     assert_eq!(chat.turns(), 2);
     assert!(chat.title().starts_with("troca"));
+}
+
+#[test]
+fn a_message_of_images_alone_is_named_after_them() {
+    let mut chat = chat();
+    chat.ask_with("  ", vec![PathBuf::from("/k/1.png")], 110);
+    assert_eq!(chat.title(), "Image");
+    assert_eq!(
+        chat.last_ask(),
+        Some(&Message::new("", vec![PathBuf::from("/k/1.png")]))
+    );
+
+    let mut chat = self::chat();
+    chat.ask_with(
+        "",
+        vec![PathBuf::from("/a.png"), PathBuf::from("/b.png")],
+        110,
+    );
+    assert_eq!(chat.title(), "Images");
+
+    let mut chat = self::chat();
+    chat.ask_with(" olha isso ", vec![PathBuf::from("/a.png")], 110);
+    assert_eq!(chat.title(), "olha isso");
+    assert_eq!(chat.last_ask().unwrap().text, "olha isso");
+}
+
+#[test]
+fn images_are_told_by_where_they_are_in_plain_text() {
+    let message = Message::new("o que é?", vec![PathBuf::from("/k/1.png")]);
+    assert_eq!(
+        message.plain(),
+        "o que é?\n\nImages attached, read them from disk:\n- /k/1.png"
+    );
+    assert_eq!(Message::new("só texto", Vec::new()).plain(), "só texto");
+
+    let mut chat = chat();
+    chat.ask_with("", vec![PathBuf::from("/k/1.png")], 110);
+    chat.end(End::Done, 120);
+    assert_eq!(
+        chat.transcript(),
+        "Dev: Images attached, read them from disk:\n- /k/1.png\n\n"
+    );
+}
+
+#[test]
+fn agents_take_the_common_image_types() {
+    assert_eq!(image_mime(&PathBuf::from("/a/shot.PNG")), Some("image/png"));
+    assert_eq!(image_mime(&PathBuf::from("b.jpg")), Some("image/jpeg"));
+    assert_eq!(image_mime(&PathBuf::from("c.webp")), Some("image/webp"));
+    assert_eq!(image_mime(&PathBuf::from("d.svg")), None);
+    assert_eq!(image_mime(&PathBuf::from("e")), None);
 }
 
 #[test]
@@ -225,6 +277,10 @@ impl ChatStore for Memory {
             .borrow_mut()
             .retain(|(ws, kept)| !(*ws == workspace && kept.id() == id));
         Ok(())
+    }
+
+    fn keep_image(&self, _: Uuid, id: u64, bytes: &[u8], ext: &str) -> io::Result<PathBuf> {
+        Ok(PathBuf::from(format!("/kept/{id}/{}.{ext}", bytes.len())))
     }
 }
 

@@ -1,5 +1,6 @@
 mod agents;
 mod assist;
+mod attach;
 mod frame;
 mod home;
 mod palette;

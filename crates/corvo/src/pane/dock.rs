@@ -2,22 +2,24 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use corvo_domain::{Chat, Choice, End, Pick};
+use corvo_domain::{Chat, Choice, End, Message, Pick};
 use corvo_ui::agent::AgentLogo;
-use corvo_ui::field;
+use corvo_ui::{field, notice};
 use gpui_kit::assets::IconName as Glyph;
+use gpui_kit::component::attachment::{Attachment, AttachmentMedia};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FontWeight, Hsla, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, Window, div,
-    prelude::*, px,
+    AnyElement, App, AppContext as _, Axis, Context, Entity, EventEmitter, ExternalPaths,
+    FontWeight, Hsla, IntoElement, ParentElement as _, PathPromptOptions, Render, SharedString,
+    Styled as _, Subscription, Task, Window, div, prelude::*, px,
 };
 
 use crate::agents::{Agents, now};
+use crate::attach::{self, Attached};
 
 // The folder a new chat works in: the project in focus.
 pub type Project = Rc<dyn Fn(&App) -> PathBuf>;
@@ -36,6 +38,8 @@ pub struct Dock {
     agents: Entity<Agents>,
     project: Project,
     field: Entity<field::State>,
+    // The images going with the next message.
+    images: Vec<Attached>,
     picker: Entity<Picker>,
     picking: bool,
     chatting: bool,
@@ -80,6 +84,7 @@ impl Dock {
             agents,
             project,
             field,
+            images: Vec::new(),
             picker,
             picking: false,
             chatting: false,
@@ -109,18 +114,105 @@ impl Dock {
             return;
         };
         let text = self.field.read(cx).value().to_string();
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && self.images.is_empty() {
             return;
         }
-        // While the agent works, what was written stays in the field.
-        let working = self.agents.read(cx).active().is_some_and(Chat::is_working);
+        // While the agent works, what was written stays in the field, and the images with it.
         let project = (self.project)(cx);
-        self.agents
-            .update(cx, |agents, cx| agents.send(&text, &project, cx));
-        if !working {
+        let images = self.images.clone();
+        let sent = self
+            .agents
+            .update(cx, |agents, cx| agents.send(&text, &images, &project, cx));
+        if sent {
+            self.images.clear();
             self.field
                 .update(cx, |field, cx| field.set_value("", window, cx));
         }
+    }
+
+    // Images come to the message; those turned away are told.
+    fn attach(
+        &mut self,
+        images: Vec<Attached>,
+        refused: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.images.extend(images);
+        for why in refused {
+            notice::warn(why, window, cx);
+        }
+        self.focus(window, cx);
+        cx.notify();
+    }
+
+    fn attach_paths(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let (images, refused) = paths.iter().map(|path| attach::from_path(path)).fold(
+            (Vec::new(), Vec::new()),
+            |(mut images, mut refused), image| {
+                match image {
+                    Ok(image) => images.push(image),
+                    Err(why) => refused.push(why),
+                }
+                (images, refused)
+            },
+        );
+        self.attach(images, refused, window, cx);
+    }
+
+    // The files picker, for images to attach.
+    fn browse(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let paths = match paths.await {
+                Ok(Ok(Some(paths))) => paths,
+                Ok(Err(err)) => {
+                    this.update_in(cx, |_, window, cx| {
+                        notice::error(format!("The file picker did not open: {err}"), window, cx);
+                    })
+                    .ok();
+                    return;
+                }
+                _ => return,
+            };
+            this.update_in(cx, |this, window, cx| this.attach_paths(&paths, window, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn detach(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.images.retain(|image| image.id != id);
+        cx.notify();
+    }
+
+    // The images going with the message, each to take back out.
+    fn attached(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        if self.images.is_empty() {
+            return None;
+        }
+        let tiles = self.images.iter().map(|image| {
+            let id = image.id;
+            Attachment::new()
+                .id(("attached", id))
+                .axis(Axis::Vertical)
+                .media(AttachmentMedia::new().src(image.preview.clone()))
+                .tooltip(image.name.clone())
+                .on_remove(cx.listener(move |this, _, _, cx| this.detach(id, cx)))
+        });
+        Some(
+            h_flex()
+                .flex_wrap()
+                .gap_2()
+                .px(px(10.))
+                .pt(px(10.))
+                .children(tiles),
+        )
     }
 
     fn pick(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -151,7 +243,7 @@ impl Dock {
                     .size(px(12.))
                     .text_color(theme.muted_foreground),
             ))
-            .child(div().truncate().child(ask.to_owned()));
+            .child(div().truncate().child(said(ask)));
 
         let (lead_el, verb, detail, time, tint): (AnyElement, String, String, Option<u64>, Hsla) =
             match reply.end() {
@@ -360,25 +452,51 @@ impl Render for Dock {
                     .border_color(theme.background)
             }));
 
-        let bar = h_flex()
+        // A paste with images keeps them beside the field; one with none goes in as text.
+        let field = Input::new(&self.field).appearance(false).on_paste({
+            let view = cx.entity().downgrade();
+            move |item, window, cx| {
+                let Some((images, refused)) = attach::pasted(item) else {
+                    return false;
+                };
+                view.update(cx, |this, cx| this.attach(images, refused, window, cx))
+                    .ok();
+                true
+            }
+        });
+        let clip = Button::new("attach")
+            .ghost()
+            .small()
+            .icon(Glyph::Paperclip)
+            .tooltip("Attach images")
+            .on_click(cx.listener(|this, _, window, cx| this.browse(window, cx)));
+        let row = h_flex()
             .h(px(48.))
             .px(px(7.))
             .gap_1()
+            .child(picker)
+            .child(div().w(px(1.)).h(px(20.)).mx_1().bg(theme.border))
+            .child(div().flex_1().min_w_0().child(field))
+            .child(clip)
+            .children(stop)
+            .child(chat);
+        let attached = self.attached(cx);
+        let theme = cx.theme();
+        let ring = theme.ring;
+        let bar = v_flex()
+            .id("agent-bar")
             .rounded(px(12.))
             .border_1()
             .border_color(theme.border)
             .bg(theme.popover)
             .shadow_lg()
-            .child(picker)
-            .child(div().w(px(1.)).h(px(20.)).mx_1().bg(theme.border))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(Input::new(&self.field).appearance(false)),
-            )
-            .children(stop)
-            .child(chat);
+            // Image files dropped on the bar go with the message.
+            .drag_over::<ExternalPaths>(move |style, _, _, _| style.border_color(ring))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.attach_paths(paths.paths(), window, cx);
+            }))
+            .children(attached)
+            .child(row);
 
         div()
             .absolute()
@@ -404,9 +522,12 @@ impl Render for Picker {
         let current = agents.agent().to_owned();
 
         // Only the agents the dev has, and the chat's own even when it is gone.
-        let rows = agents.hub().specs().iter().enumerate().filter(|(_, spec)| {
-            spec.id() == current || agents.hub().available(spec.id())
-        });
+        let rows = agents
+            .hub()
+            .specs()
+            .iter()
+            .enumerate()
+            .filter(|(_, spec)| spec.id() == current || agents.hub().available(spec.id()));
         let rows = rows.map(|(ix, spec)| {
             let id = spec.id().to_owned();
             let on = id == current;
@@ -726,6 +847,20 @@ fn lead(child: impl IntoElement) -> impl IntoElement {
 
 fn dot(color: Hsla) -> impl IntoElement {
     div().size(px(6.)).rounded_full().bg(color)
+}
+
+// The message in a line: its words, and how many images went with it.
+fn said(message: &Message) -> String {
+    let images = match message.images.len() {
+        0 => return message.text.clone(),
+        1 => "1 image".to_owned(),
+        n => format!("{n} images"),
+    };
+    if message.text.is_empty() {
+        images
+    } else {
+        format!("{} · {images}", message.text)
+    }
 }
 
 pub fn clock(secs: u64) -> String {

@@ -27,7 +27,7 @@ use lsp_types::Position;
 
 use crate::agents::{self, Agents};
 use crate::palette::{self, Offer};
-use crate::pane::chats::ChatWindow;
+use crate::pane::chats::{self, ChatWindow};
 use crate::pane::code::{self, Code};
 use crate::pane::dock::{self, Dock, Project};
 use crate::pane::files::{self, Files};
@@ -102,9 +102,8 @@ impl Shell {
         let bench = cx.new(|_| bench);
         let repos = cx.new(|_| Repos::new(Arc::new(GitCli)));
         let home = cx.new(|_| Overview::new(bench.clone(), registry, repos.clone()));
-        let code = cx.new(|cx| {
-            Code::new(bench.clone(), hub.clone(), home.clone(), repos.clone(), cx)
-        });
+        let code =
+            cx.new(|cx| Code::new(bench.clone(), hub.clone(), home.clone(), repos.clone(), cx));
         let files = cx.new(|cx| Files::new(bench.clone(), repos.clone(), window, cx));
         let git = cx.new(|cx| GitWindow::new(repos.clone(), cx));
         let structure = cx.new(|cx| Structure::new(bench.clone(), window, cx));
@@ -162,6 +161,7 @@ impl Shell {
             cx.subscribe_in(&code, window, Self::on_code),
             cx.subscribe_in(&home, window, Self::on_home),
             cx.subscribe_in(&git, window, Self::on_git),
+            cx.subscribe_in(&chats, window, Self::on_chats),
             // The chat window's bar counts its chats.
             cx.observe(&chats, |_, _, cx| cx.notify()),
             cx.subscribe(&repos, Self::on_moved),
@@ -506,6 +506,22 @@ impl Shell {
         self.paletting = false;
         self.focus.focus(window, cx);
         cx.notify();
+    }
+
+    // An image sent in a chat opens in the code, in the chat window's place.
+    fn on_chats(
+        &mut self,
+        _: &Entity<ChatWindow>,
+        event: &chats::Event,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            chats::Event::Open(path) => {
+                self.close_chat(window, cx);
+                self.code.update(cx, |code, cx| code.open(path, window, cx));
+            }
+        }
     }
 
     fn on_git(
@@ -877,14 +893,10 @@ impl Shell {
             .occlude()
             .bg(theme.background.opacity(0.75))
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                dimmed
-                    .update(cx, |shell, cx| close(shell, window, cx))
-                    .ok();
+                dimmed.update(cx, |shell, cx| close(shell, window, cx)).ok();
             });
         let bar = bar.center(field).on_close(move |window, cx| {
-            closer
-                .update(cx, |shell, cx| close(shell, window, cx))
-                .ok();
+            closer.update(cx, |shell, cx| close(shell, window, cx)).ok();
         });
         let panel = v_flex()
             .id(id)
@@ -1183,11 +1195,7 @@ fn item(offer: &Offer) -> CommandItem {
         h_flex()
             .min_w_0()
             .gap_2()
-            .child(
-                Icon::new(glyph)
-                    .small()
-                    .text_color(theme.muted_foreground),
-            )
+            .child(Icon::new(glyph).small().text_color(theme.muted_foreground))
             .child(div().flex_shrink_0().child(label.clone()))
             .children(detail.clone().map(|detail| {
                 div()

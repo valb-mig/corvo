@@ -3,7 +3,7 @@ use std::sync::Once;
 use std::time::{Duration, Instant};
 
 use corvo_agent::{Event, Hub, MODE};
-use corvo_domain::{AgentSpec, End, Status, StepKind};
+use corvo_domain::{AgentSpec, End, Message, Status, StepKind};
 use futures::channel::mpsc::UnboundedReceiver;
 
 fn start(spec: AgentSpec) -> (Hub, UnboundedReceiver<Event>) {
@@ -18,15 +18,37 @@ fn start(spec: AgentSpec) -> (Hub, UnboundedReceiver<Event>) {
 }
 
 fn hub() -> (Hub, UnboundedReceiver<Event>) {
+    fake(&[])
+}
+
+fn fake(flags: &[&str]) -> (Hub, UnboundedReceiver<Event>) {
     let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_agent.py");
     let fake = fake.to_string_lossy().into_owned();
+    let mut args = vec!["-I", &fake];
+    args.extend_from_slice(flags);
     start(AgentSpec::new(
         "fake",
         "Fake",
         "python3",
-        &["-I", &fake],
+        &args,
         "pip install fake",
     ))
+}
+
+fn image(name: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("corvo-hub-{}-{name}", std::process::id()));
+    std::fs::write(&path, [1u8, 2, 3, 4, 5, 6]).unwrap();
+    path
+}
+
+fn reply(events: &mut UnboundedReceiver<Event>) -> String {
+    loop {
+        match next(events) {
+            Event::Text { text, .. } => return text,
+            Event::Ready { .. } | Event::Notice(_) => {}
+            other => panic!("no text: {other:?}"),
+        }
+    }
 }
 
 fn project() -> PathBuf {
@@ -255,4 +277,37 @@ fn a_missing_agent_says_how_to_install_it() {
             ..
         }
     ));
+}
+
+#[test]
+fn images_go_to_an_agent_that_reads_them() {
+    let (hub, mut events) = fake(&["--images"]);
+    hub.open(1, "fake", &project(), None, None);
+    let shot = image("shot.png");
+    hub.send(1, &Message::new("look", vec![shot]));
+    assert_eq!(reply(&mut events), "echo: look [image/png 8]");
+}
+
+#[test]
+fn an_agent_that_reads_no_images_is_told_where_they_are() {
+    let (hub, mut events) = hub();
+    hub.open(1, "fake", &project(), None, None);
+    let shot = image("plain.jpg");
+    hub.send(1, &Message::new("look", vec![shot.clone()]));
+    let mut told = false;
+    let text = loop {
+        match next(&mut events) {
+            Event::Notice(why) => told = why.contains("does not read images"),
+            Event::Text { text, .. } => break text,
+            _ => {}
+        }
+    };
+    assert!(told, "the dev hears of it");
+    assert_eq!(
+        text,
+        format!(
+            "echo: look\n\nImages attached, read them from disk:\n- {}",
+            shot.display()
+        )
+    );
 }

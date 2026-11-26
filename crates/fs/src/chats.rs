@@ -2,10 +2,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use corvo_domain::port::ChatStore;
-use corvo_domain::{Chat, Diff, End, Entry, Part, Reply, Status, Step, StepKind, Uuid};
+use corvo_domain::{Chat, Diff, End, Entry, Message, Part, Reply, Status, Step, StepKind, Uuid};
 use serde::{Deserialize, Serialize};
 
-// One file per chat, in a folder per workspace. A question the agent was waiting on is not kept:
+// One file per chat, in a folder per workspace, and beside it a folder with the images sent in
+// it. A question the agent was waiting on is not kept:
 // the agent that asked it is gone with the app.
 #[derive(Deserialize, Serialize)]
 struct File {
@@ -27,6 +28,8 @@ struct File {
 enum Kept {
     You {
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<PathBuf>,
     },
     Reply {
         agent: String,
@@ -113,7 +116,10 @@ impl From<File> for Chat {
 impl From<&Entry> for Kept {
     fn from(entry: &Entry) -> Self {
         match entry {
-            Entry::You(text) => Kept::You { text: text.clone() },
+            Entry::You(message) => Kept::You {
+                text: message.text.clone(),
+                images: message.images.clone(),
+            },
             Entry::Switch(agent) => Kept::Switch {
                 agent: agent.clone(),
             },
@@ -135,7 +141,7 @@ impl From<&Entry> for Kept {
 impl From<Kept> for Entry {
     fn from(kept: Kept) -> Self {
         match kept {
-            Kept::You { text } => Entry::You(text),
+            Kept::You { text, images } => Entry::You(Message::new(text, images)),
             Kept::Switch { agent } => Entry::Switch(agent),
             Kept::Reply {
                 agent,
@@ -277,10 +283,7 @@ impl JsonChats {
 
     // The chats of a removed workspace go with it.
     pub fn forget(&self, workspace: Uuid) -> io::Result<()> {
-        match std::fs::remove_dir_all(self.folder(workspace)) {
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            done => done,
-        }
+        gone(std::fs::remove_dir_all(self.folder(workspace)))
     }
 
     fn folder(&self, workspace: Uuid) -> PathBuf {
@@ -289,6 +292,10 @@ impl JsonChats {
 
     fn path(&self, workspace: Uuid, id: u64) -> PathBuf {
         self.folder(workspace).join(format!("{id}.json"))
+    }
+
+    fn images(&self, workspace: Uuid, id: u64) -> PathBuf {
+        self.folder(workspace).join(id.to_string())
     }
 }
 
@@ -324,10 +331,36 @@ impl ChatStore for JsonChats {
     }
 
     fn remove(&self, workspace: Uuid, id: u64) -> io::Result<()> {
-        match std::fs::remove_file(self.path(workspace, id)) {
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            done => done,
-        }
+        gone(std::fs::remove_file(self.path(workspace, id)))?;
+        gone(std::fs::remove_dir_all(self.images(workspace, id)))
+    }
+
+    // Numbered in the order they come: 1.png, 2.jpg…
+    fn keep_image(&self, workspace: Uuid, id: u64, bytes: &[u8], ext: &str) -> io::Result<PathBuf> {
+        let dir = self.images(workspace, id);
+        std::fs::create_dir_all(&dir)?;
+        let next = std::fs::read_dir(&dir)?
+            .filter_map(|entry| {
+                let name = entry.ok()?.file_name();
+                let stem = Path::new(&name).file_stem()?.to_str()?.to_owned();
+                stem.parse::<u64>().ok()
+            })
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let path = dir.join(format!("{next}.{}", ext.to_lowercase()));
+        let tmp = dir.join(format!("{next}.tmp"));
+        std::fs::write(&tmp, bytes)?;
+        std::fs::rename(tmp, &path)?;
+        Ok(path)
+    }
+}
+
+// What is already gone needs no removing.
+fn gone(done: io::Result<()>) -> io::Result<()> {
+    match done {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        done => done,
     }
 }
 

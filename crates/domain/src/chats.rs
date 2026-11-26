@@ -1,5 +1,5 @@
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
@@ -118,6 +118,12 @@ impl Chats {
             self.move_on(id);
         }
         self.store.remove(self.workspace, id)
+    }
+
+    // An image to send in the chat, kept with it so the chat holds it whatever happens to where
+    // it came from.
+    pub fn keep_image(&self, id: u64, bytes: &[u8], ext: &str) -> io::Result<PathBuf> {
+        self.store.keep_image(self.workspace, id, bytes, ext)
     }
 
     // Writes a chat down, once it has something in it.

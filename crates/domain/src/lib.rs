@@ -25,7 +25,10 @@ pub mod server;
 pub use agent::{AgentSpec, Choice, Options, Pick, agents};
 pub use arrangement::{Arrangement, Group, Mark};
 pub use atlas::{Atlas, Place, stack};
-pub use chat::{Answer, Ask, Chat, Diff, End, Entry, Part, Reply, Status, Step, StepKind, ago};
+pub use chat::{
+    Answer, Ask, Chat, Diff, End, Entry, Message, Part, Reply, Status, Step, StepKind, ago,
+    image_mime,
+};
 pub use chats::Chats;
 pub use content::Content;
 pub use database::{Engine, Usage, survey};

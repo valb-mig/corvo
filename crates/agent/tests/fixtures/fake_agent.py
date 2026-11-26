@@ -4,6 +4,7 @@ import sys
 # A tiny ACP agent over stdio, one JSON message per line, for the hub's tests.
 
 state = {"model": "opus", "effort": "high"}
+images = "--images" in sys.argv
 sessions = 0
 
 
@@ -54,7 +55,11 @@ def update(session, body):
 
 def prompt(id, params):
     session = params["sessionId"]
-    text = params["prompt"][0]["text"]
+    blocks = params["prompt"]
+    text = " ".join(block["text"] for block in blocks if block["type"] == "text")
+    for block in blocks:
+        if block["type"] == "image":
+            text += " [%s %d]" % (block["mimeType"], len(block["data"]))
     update(session, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "echo: " + text}})
     if "ask" in text:
         update(session, {
@@ -108,7 +113,7 @@ while True:
     id = msg.get("id")
     params = msg.get("params") or {}
     if method == "initialize":
-        send({"id": id, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}}})
+        send({"id": id, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True, "promptCapabilities": {"image": images}}}})
     elif method == "session/new":
         sessions += 1
         send({"id": id, "result": {"sessionId": "s%d" % sessions, "configOptions": config(), "modes": MODES}})

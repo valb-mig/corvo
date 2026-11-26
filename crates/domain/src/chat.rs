@@ -19,10 +19,17 @@ pub struct Chat {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Entry {
-    You(String),
+    You(Message),
     Reply(Reply),
     // Another agent goes on from here.
     Switch(String),
+}
+
+// What the dev wrote, with the images they attached, kept as files.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Message {
+    pub text: String,
+    pub images: Vec<PathBuf>,
 }
 
 // What an agent answered to one message: its words and the steps it took, in the order they came.
@@ -106,6 +113,49 @@ pub struct Answer {
 }
 
 const TITLE: usize = 40;
+
+// The image types every agent that takes images reads.
+const IMAGES: [(&str, &str); 5] = [
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+];
+
+// The media type of an image the agents take, from its extension.
+pub fn image_mime(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_lowercase();
+    IMAGES
+        .iter()
+        .find(|(known, _)| *known == ext)
+        .map(|(_, mime)| *mime)
+}
+
+impl Message {
+    pub fn new(text: impl Into<String>, images: Vec<PathBuf>) -> Self {
+        Self {
+            text: text.into(),
+            images,
+        }
+    }
+
+    // What the dev wrote, the images told by where they are, for an agent that reads text only.
+    pub fn plain(&self) -> String {
+        if self.images.is_empty() {
+            return self.text.clone();
+        }
+        let mut out = self.text.clone();
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str("Images attached, read them from disk:");
+        for image in &self.images {
+            out.push_str(&format!("\n- {}", image.display()));
+        }
+        out
+    }
+}
 
 impl Chat {
     pub fn new(id: u64, agent: impl Into<String>, project: impl Into<PathBuf>, now: u64) -> Self {
@@ -209,10 +259,20 @@ impl Chat {
 
     // The dev writes: the reply of the chat's agent starts. The first message names the chat.
     pub fn ask(&mut self, text: &str, now: u64) {
+        self.ask_with(text, Vec::new(), now);
+    }
+
+    // A message with images: one with no words is named after them.
+    pub fn ask_with(&mut self, text: &str, images: Vec<PathBuf>, now: u64) {
         if self.turns() == 0 {
-            self.title = title(text);
+            self.title = match (text.trim().is_empty(), images.len()) {
+                (false, _) => title(text),
+                (true, 1) => "Image".to_owned(),
+                (true, _) => "Images".to_owned(),
+            };
         }
-        self.entries.push(Entry::You(text.trim().to_owned()));
+        self.entries
+            .push(Entry::You(Message::new(text.trim(), images)));
         self.entries
             .push(Entry::Reply(Reply::new(self.agent.clone(), now)));
         self.updated = now;
@@ -243,9 +303,9 @@ impl Chat {
     }
 
     // The message the last reply answers.
-    pub fn last_ask(&self) -> Option<&str> {
+    pub fn last_ask(&self) -> Option<&Message> {
         self.entries.iter().rev().find_map(|entry| match entry {
-            Entry::You(text) => Some(text.as_str()),
+            Entry::You(message) => Some(message),
             _ => None,
         })
     }
@@ -325,7 +385,9 @@ impl Chat {
 
     fn hit(&self, query: &str) -> Option<&str> {
         self.entries.iter().find_map(|entry| match entry {
-            Entry::You(text) if text.to_lowercase().contains(query) => Some(text.as_str()),
+            Entry::You(message) if message.text.to_lowercase().contains(query) => {
+                Some(message.text.as_str())
+            }
             Entry::Reply(reply) => reply.parts.iter().find_map(|part| match part {
                 Part::Text(text) if text.to_lowercase().contains(query) => Some(text.as_str()),
                 _ => None,
@@ -339,7 +401,7 @@ impl Chat {
         let mut out = String::new();
         for entry in &self.entries {
             match entry {
-                Entry::You(text) => out.push_str(&format!("Dev: {text}\n\n")),
+                Entry::You(message) => out.push_str(&format!("Dev: {}\n\n", message.plain())),
                 Entry::Reply(reply) => {
                     let mut said = String::new();
                     for part in &reply.parts {

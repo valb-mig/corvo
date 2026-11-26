@@ -101,3 +101,39 @@ fn a_broken_file_is_left_out() {
     fs::write(dir.join(SPACE.to_string()).join("9.json"), "{ not json").unwrap();
     assert_eq!(store.load(SPACE).unwrap().len(), 1);
 }
+
+#[test]
+fn images_are_kept_beside_the_chat_and_go_with_it() {
+    let dir = scratch("images");
+    let store = JsonChats::new(&dir);
+    let one = store.keep_image(SPACE, 3, b"png bytes", "PNG").unwrap();
+    let two = store.keep_image(SPACE, 3, b"jpg bytes", "jpg").unwrap();
+    let folder = dir.join(SPACE.to_string()).join("3");
+    assert_eq!(one, folder.join("1.png"));
+    assert_eq!(two, folder.join("2.jpg"));
+    assert_eq!(fs::read(&one).unwrap(), b"png bytes");
+
+    let mut chat = chat();
+    chat.ask_with("e isso?", vec![one.clone(), two], 200);
+    store.save(SPACE, &chat).unwrap();
+    assert_eq!(store.load(SPACE).unwrap(), vec![chat]);
+
+    store.remove(SPACE, 3).unwrap();
+    assert!(!folder.exists());
+}
+
+#[test]
+fn a_message_kept_before_images_loads_with_none() {
+    let dir = scratch("old");
+    let folder = dir.join(SPACE.to_string());
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(
+        folder.join("4.json"),
+        r#"{"id":4,"title":"t","agent":"claude","project":"/p","created":1,"updated":1,
+            "entries":[{"type":"you","text":"oi"}]}"#,
+    )
+    .unwrap();
+    let chat = JsonChats::new(&dir).load(SPACE).unwrap().remove(0);
+    let message = chat.last_ask().unwrap();
+    assert_eq!((message.text.as_str(), message.images.len()), ("oi", 0));
+}

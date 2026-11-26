@@ -7,7 +7,8 @@ use agent_client_protocol_schema::v1::{
     InitializeResponse, LoadSessionResponse, NewSessionResponse, PromptResponse,
     RequestPermissionRequest, SessionNotification, SessionUpdate, SetSessionConfigOptionResponse,
 };
-use corvo_domain::{AgentSpec, Ask, End, Options};
+use base64::Engine as _;
+use corvo_domain::{AgentSpec, Ask, End, Message, Options, image_mime};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use serde_json::{Value, json};
 
@@ -92,6 +93,8 @@ struct Running {
     conn: Arc<Conn>,
     // Whether it can load a session back, once it said hello; until then, what waits on it.
     load: Option<bool>,
+    // Whether it reads the images in a message.
+    images: bool,
     queue: Vec<Then>,
 }
 
@@ -102,7 +105,7 @@ struct Session {
     loading: bool,
     // The conversation before this agent came in, told with its first message.
     context: Option<String>,
-    queued: Vec<String>,
+    queued: Vec<Message>,
 }
 
 struct Waiting {
@@ -195,6 +198,11 @@ impl Hub {
 
     // Sends what the dev wrote; before the session is there, it waits for it.
     pub fn prompt(&self, chat: u64, text: &str) {
+        self.send(chat, &Message::new(text, Vec::new()));
+    }
+
+    // A message with its images: an agent that reads none is told where they are on disk.
+    pub fn send(&self, chat: u64, message: &Message) {
         let mut state = lock(&self.shared.state);
         let Some(session) = state.sessions.get_mut(&chat) else {
             drop(state);
@@ -205,16 +213,20 @@ impl Hub {
             return;
         };
         if session.id.is_none() || session.loading {
-            session.queued.push(text.to_owned());
+            session.queued.push(message.clone());
             return;
         }
-        let text = told(session.context.take(), text);
+        let context = session.context.take();
         let id = session.id.clone().unwrap_or_default();
         let agent = session.agent.clone();
-        let conn = state.agents.get(&agent).map(|running| running.conn.clone());
+        let running = state
+            .agents
+            .get(&agent)
+            .map(|running| (running.conn.clone(), running.images));
         drop(state);
-        if let Some(conn) = conn {
-            self.shared.send(chat, &conn, &id, text);
+        if let Some((conn, images)) = running {
+            let prompt = self.shared.prompt(context, message, images);
+            self.shared.send(chat, &conn, &id, prompt);
         }
     }
 
@@ -383,6 +395,7 @@ impl Shared {
             Running {
                 conn: conn.clone(),
                 load: None,
+                images: false,
                 queue: vec![Box::new(then)],
             },
         );
@@ -410,7 +423,10 @@ impl Shared {
                         .map_err(|err| err.to_string())
                 });
                 match parsed {
-                    Ok(hello) => shared.ready(&agent, hello.agent_capabilities.load_session),
+                    Ok(hello) => {
+                        let can = hello.agent_capabilities;
+                        shared.ready(&agent, can.load_session, can.prompt_capabilities.image);
+                    }
                     Err(err) => shared.gone(&agent, Some(format!("{name}: {err}"))),
                 }
             }),
@@ -429,12 +445,13 @@ impl Shared {
         })
     }
 
-    fn ready(self: &Arc<Self>, agent: &str, load: bool) {
+    fn ready(self: &Arc<Self>, agent: &str, load: bool, images: bool) {
         let mut state = lock(&self.state);
         let Some(running) = state.agents.get_mut(agent) else {
             return;
         };
         running.load = Some(load);
+        running.images = images;
         let queue = std::mem::take(&mut running.queue);
         let conn = running.conn.clone();
         drop(state);
@@ -528,16 +545,22 @@ impl Shared {
         let queued = std::mem::take(&mut session.queued);
         let mut context = session.context.take();
         let agent = session.agent.clone();
-        let conn = state.agents.get(&agent).map(|running| running.conn.clone());
+        let running = state
+            .agents
+            .get(&agent)
+            .map(|running| (running.conn.clone(), running.images));
         drop(state);
         self.emit(Event::Ready {
             chat,
             session: id.clone(),
             options,
         });
-        let Some(conn) = conn else { return };
-        for text in queued {
-            self.send(chat, &conn, &id, told(context.take(), &text));
+        let Some((conn, images)) = running else {
+            return;
+        };
+        for message in queued {
+            let prompt = self.prompt(context.take(), &message, images);
+            self.send(chat, &conn, &id, prompt);
         }
         if let Some(context) = context {
             let mut state = lock(&self.state);
@@ -555,11 +578,47 @@ impl Shared {
         });
     }
 
-    fn send(self: &Arc<Self>, chat: u64, conn: &Arc<Conn>, session: &str, text: String) {
+    // The blocks of a message: its words, with the conversation before when the agent is new to
+    // it, then its images, read from disk now. An image that no longer reads is left out.
+    fn prompt(&self, context: Option<String>, message: &Message, images: bool) -> Vec<Value> {
+        if !images && !message.images.is_empty() {
+            self.emit(Event::Notice(
+                "This agent does not read images: it was told where they are on disk".to_owned(),
+            ));
+        }
+        let text = if images {
+            message.text.clone()
+        } else {
+            message.plain()
+        };
+        let text = told(context, &text);
+        let mut blocks = Vec::new();
+        if !text.trim().is_empty() {
+            blocks.push(json!({ "type": "text", "text": text }));
+        }
+        if !images {
+            return blocks;
+        }
+        for path in &message.images {
+            let mime = image_mime(path).unwrap_or("image/png");
+            match std::fs::read(path) {
+                Ok(bytes) => blocks.push(json!({
+                    "type": "image",
+                    "mimeType": mime,
+                    "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+                    "uri": url(path),
+                })),
+                Err(err) => self.emit(Event::Notice(format!("{}: {err}", path.display()))),
+            }
+        }
+        blocks
+    }
+
+    fn send(self: &Arc<Self>, chat: u64, conn: &Arc<Conn>, session: &str, prompt: Vec<Value>) {
         let shared = Arc::downgrade(self);
         conn.call(
             "session/prompt",
-            json!({ "sessionId": session, "prompt": [{ "type": "text", "text": text }] }),
+            json!({ "sessionId": session, "prompt": prompt }),
             Box::new(move |result| {
                 let Some(shared) = shared.upgrade() else {
                     return;
@@ -716,6 +775,10 @@ fn told(context: Option<String>, text: &str) -> String {
         ),
         _ => text.to_owned(),
     }
+}
+
+fn url(path: &Path) -> String {
+    format!("file://{}", path.display())
 }
 
 fn cancelled() -> Value {

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 
-use corvo_domain::{Chat, End, Entry, Part, Status, Step, StepKind, ago};
+use corvo_domain::{Chat, End, Entry, Message, Part, Status, Step, StepKind, ago};
 use corvo_ui::agent::{AgentLogo, Sign, diff_lines, step_glyph};
 use corvo_ui::field;
 use gpui_kit::assets::IconName as Glyph;
@@ -11,16 +12,23 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, ElementId, Entity, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window, div,
-    prelude::*, px, relative,
+    AnyElement, App, AppContext as _, Context, ElementId, Entity, EventEmitter, FontWeight,
+    InteractiveElement as _, IntoElement, ObjectFit, ParentElement as _, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription,
+    WeakEntity, Window, div, img, prelude::*, px, relative,
 };
 
 use crate::agents::{Agents, now};
 use crate::pane::dock::{Project, clock, relative as from_project};
 
+pub enum Event {
+    // An image sent in the chat, to see in the code.
+    Open(PathBuf),
+}
+
 const OUTPUT: usize = 60;
+// The side of an image sent in the chat.
+const IMAGE: f32 = 120.;
 // The width of the list of chats.
 const LIST: f32 = 232.;
 
@@ -40,6 +48,7 @@ pub struct ChatWindow {
     _subs: Vec<Subscription>,
 }
 
+impl EventEmitter<Event> for ChatWindow {}
 
 impl ChatWindow {
     pub fn new(
@@ -48,15 +57,13 @@ impl ChatWindow {
         workspace: SharedString,
         cx: &mut Context<Self>,
     ) -> Self {
-        let subs = vec![
-            cx.observe(&agents, |this: &mut Self, _, cx| {
-                // The conversation follows what comes in, unless the dev scrolled up to read.
-                if this.at_bottom() {
-                    this.scroll.scroll_to_bottom();
-                }
-                cx.notify();
-            }),
-        ];
+        let subs = vec![cx.observe(&agents, |this: &mut Self, _, cx| {
+            // The conversation follows what comes in, unless the dev scrolled up to read.
+            if this.at_bottom() {
+                this.scroll.scroll_to_bottom();
+            }
+            cx.notify();
+        })];
         Self {
             agents,
             project,
@@ -498,6 +505,71 @@ impl ChatWindow {
             )
     }
 
+    // What the dev wrote: the images above, each opening in the code, and the words under them.
+    fn you(&self, message: &Message, ix: usize, view: &WeakEntity<Self>, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let (border, muted, secondary) = (theme.border, theme.muted_foreground, theme.secondary);
+        let images = (!message.images.is_empty()).then(|| {
+            h_flex()
+                .max_w(relative(0.78))
+                .flex_wrap()
+                .justify_end()
+                .gap_2()
+                .children(message.images.iter().enumerate().map(|(n, path)| {
+                    let view = view.clone();
+                    let open = path.clone();
+                    div()
+                        .id(ElementId::Name(format!("image-{ix}-{n}").into()))
+                        .size(px(IMAGE))
+                        .rounded(px(10.))
+                        .overflow_hidden()
+                        .border_1()
+                        .border_color(border)
+                        .bg(secondary)
+                        .cursor_pointer()
+                        .child(
+                            img(path.clone())
+                                .size_full()
+                                .object_fit(ObjectFit::Cover)
+                                .with_fallback(move || {
+                                    v_flex()
+                                        .size_full()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap_1()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .child(Icon::new(Glyph::ImageOff).size(px(18.)))
+                                        .child("Missing")
+                                        .into_any_element()
+                                }),
+                        )
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |_, cx| cx.emit(Event::Open(open.clone())))
+                                .ok();
+                        })
+                }))
+        });
+        let text = (!message.text.is_empty()).then(|| {
+            div()
+                .max_w(relative(0.78))
+                .px(px(14.))
+                .py(px(10.))
+                .rounded(px(12.))
+                .bg(secondary)
+                .border_1()
+                .border_color(border)
+                .text_sm()
+                .child(message.text.clone())
+        });
+        v_flex()
+            .items_end()
+            .gap_2()
+            .children(images)
+            .children(text)
+            .into_any_element()
+    }
+
     fn thread(
         &self,
         chat: &Chat,
@@ -513,21 +585,7 @@ impl ChatWindow {
             .iter()
             .enumerate()
             .map(|(ix, entry)| match entry {
-                Entry::You(text) => h_flex()
-                    .justify_end()
-                    .child(
-                        div()
-                            .max_w(relative(0.78))
-                            .px(px(14.))
-                            .py(px(10.))
-                            .rounded(px(12.))
-                            .bg(theme.secondary)
-                            .border_1()
-                            .border_color(theme.border)
-                            .text_sm()
-                            .child(text.clone()),
-                    )
-                    .into_any_element(),
+                Entry::You(message) => self.you(message, ix, view, cx),
                 Entry::Switch(agent) => h_flex()
                     .gap_2()
                     .text_xs()

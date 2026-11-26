@@ -3,8 +3,10 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use corvo_agent::{Event, Hub, Patch};
+
+use crate::attach::Attached;
 use corvo_domain::port::OptionStore;
-use corvo_domain::{Chat, Chats, End, Options, Reply};
+use corvo_domain::{Chat, Chats, End, Message, Options, Reply};
 use gpui_kit::{Context, EventEmitter};
 
 // Something the dev should hear about, outside any chat.
@@ -134,24 +136,44 @@ impl Agents {
         cx.notify();
     }
 
-    // What the dev wrote goes to the picked chat, or to a new one.
-    pub fn send(&mut self, text: &str, project: &Path, cx: &mut Context<Self>) {
+    // What the dev wrote goes to the picked chat, or to a new one, with the images attached, kept
+    // with the chat first. Whether it went.
+    pub fn send(
+        &mut self,
+        text: &str,
+        images: &[Attached],
+        project: &Path,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let text = text.trim();
-        if text.is_empty() {
-            return;
+        if text.is_empty() && images.is_empty() {
+            return false;
         }
         if self.chats.active().is_some_and(Chat::is_working) {
             cx.emit(Note::Notice(
                 "The agent is still working: stop it or wait for it".to_owned(),
             ));
-            return;
+            return false;
         }
         self.open(project, cx);
-        let Some(chat) = self.chats.active_mut() else {
-            return;
+        let Some(id) = self.chats.active_id() else {
+            return false;
         };
-        let id = chat.id();
-        chat.ask(text, now());
+        let mut kept = Vec::new();
+        for image in images {
+            match self.chats.keep_image(id, &image.bytes, image.ext) {
+                Ok(path) => kept.push(path),
+                Err(err) => {
+                    cx.emit(Note::Notice(format!("{}: {err}", image.name)));
+                    return false;
+                }
+            }
+        }
+        let message = Message::new(text, kept);
+        let Some(chat) = self.chats.active_mut() else {
+            return false;
+        };
+        chat.ask_with(text, message.images.clone(), now());
         let available = self.hub.available(chat.agent());
         let agent = chat.agent().to_owned();
         if !available {
@@ -166,10 +188,11 @@ impl Agents {
                 });
             }
         } else {
-            self.hub.prompt(id, text);
+            self.hub.send(id, &message);
         }
         self.save(id, cx);
         cx.notify();
+        true
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
