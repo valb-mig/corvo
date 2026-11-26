@@ -33,6 +33,9 @@ pub struct GitWindow {
     diff: Entity<DiffState>,
     // The patch shown did not read, and why.
     trouble: Option<String>,
+    // The file and patch shown. Showing a patch again starts it over at the top, so one read
+    // again the same is left as it is.
+    shown: Option<(PathBuf, String)>,
     // The read of the patch under way; a newer one drops it.
     _reading: Option<Task<()>>,
     _subs: Vec<Subscription>,
@@ -50,6 +53,7 @@ impl GitWindow {
             picked: None,
             diff,
             trouble: None,
+            shown: None,
             _reading: None,
             _subs: subs,
         };
@@ -88,28 +92,42 @@ impl GitWindow {
         let Some((root, path)) = target else {
             self._reading = None;
             self.trouble = None;
-            self.diff
-                .update(cx, |diff, cx| diff.set_files(Vec::new(), cx));
+            if self.shown.take().is_some() {
+                self.diff
+                    .update(cx, |diff, cx| diff.set_files(Vec::new(), cx));
+            }
             cx.notify();
             return;
         };
         let git = self.repos.read(cx).git();
+        let file = path.clone();
         let task = cx
             .background_executor()
-            .spawn(async move { git.patch(&root, &path) });
+            .spawn(async move { git.patch(&root, &file) });
         self._reading = Some(cx.spawn(async move |this, cx| {
             let patch = task.await;
             this.update(cx, |this, cx| {
-                let files = patch.map_err(|err| err.to_string()).and_then(|patch| {
-                    DiffFile::parse(&patch).map_err(|err| err.message().to_string())
+                let same = |patch: &String| {
+                    this.shown
+                        .as_ref()
+                        .is_some_and(|(shown, text)| *shown == path && text == patch)
+                };
+                if patch.as_ref().is_ok_and(same) && this.trouble.is_none() {
+                    return;
+                }
+                let read = patch.map_err(|err| err.to_string()).and_then(|patch| {
+                    let files = DiffFile::parse(&patch).map_err(|err| err.message().to_string());
+                    files.map(|files| (patch, files))
                 });
-                let files = match files {
-                    Ok(files) => {
+                let files = match read {
+                    Ok((patch, files)) => {
                         this.trouble = None;
+                        this.shown = Some((path, patch));
                         files
                     }
                     Err(why) => {
                         this.trouble = Some(why);
+                        this.shown = None;
                         Vec::new()
                     }
                 };
