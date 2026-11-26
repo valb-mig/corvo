@@ -39,18 +39,17 @@ pub const ZOOM_MAX: f32 = 2.;
 // The room a group's frame leaves around its cards, and the height of its title.
 pub const RIM: f32 = 12.;
 pub const TITLE: f32 = 28.;
-// The room between blocks of a column, how far the sheets of a pile show under it, and the
-// height of a chip.
+// The room between blocks of a column, how far the sheets of a pile show under it, the height
+// of a chip, and the room between the sheets of a pile and its chip.
 pub const BLOCK: f32 = 22.;
 pub const SHEETS: f32 = 10.;
 pub const CHIP: f32 = 28.;
+pub const UNDER: f32 = 6.;
 
 const ICON: f32 = 16.;
 const STEP: f32 = 1.2;
 // How far the wheel goes to turn a pile by one: a notch of a mouse wheel.
 const TURN: f32 = 48.;
-// The hover group of the top of a pile.
-const PILE: &str = "graph-pile";
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 type Turn = Rc<dyn Fn(i32, &mut Window, &mut App)>;
@@ -76,19 +75,23 @@ pub struct Card {
     actions: Vec<Action>,
     drop: Option<Drop>,
     form: Form,
+    // The chip under the sheets of a pile.
+    under: Option<Under>,
 }
 
-// How a card is drawn: plain, as the top of a pile with its sheets under it, on its cover or
-// turned to one of what it holds, or as a chip at the end of its column, with no curve to it and
-// its holder not sitting level with it.
+// How a card is drawn: plain, as the top of a pile with its sheets and a chip under it, or as a
+// chip at the end of its column, with no curve to it and its holder not sitting level with it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Form {
     #[default]
     Plain,
-    Pile {
-        cover: bool,
-    },
+    Pile,
     Chip,
+}
+
+struct Under {
+    label: SharedString,
+    run: Handler,
 }
 
 // An entry of the menu a right click on the card opens.
@@ -120,6 +123,7 @@ impl Card {
             actions: Vec::new(),
             drop: None,
             form: Form::Plain,
+            under: None,
         }
     }
 
@@ -189,10 +193,18 @@ impl Card {
         self
     }
 
-    // Drawn as the top of a pile: on its cover, its meta says what a click does, with a chevron.
-    // Neither a pile nor a chip can be picked.
-    pub fn pile(mut self, cover: bool) -> Self {
-        self.form = Form::Pile { cover };
+    // Drawn as the top of a pile, and under its sheets a chip doing what its label says, in
+    // sight whatever the pile is turned to. Neither a pile nor a chip can be picked.
+    pub fn pile(
+        mut self,
+        label: impl Into<SharedString>,
+        run: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.form = Form::Pile;
+        self.under = Some(Under {
+            label: label.into(),
+            run: Rc::new(run),
+        });
         self.selectable = false;
         self
     }
@@ -214,7 +226,7 @@ impl Card {
     fn size(&self) -> (f32, f32) {
         match (&self.drop, self.form) {
             (Some(drop), _) => (drop.width.max(WIDTH), HEIGHT + drop.height),
-            (None, Form::Pile { .. }) => (WIDTH, HEIGHT + SHEETS),
+            (None, Form::Pile) => (WIDTH, HEIGHT + SHEETS + UNDER + CHIP),
             (None, Form::Chip) => (WIDTH, CHIP),
             (None, Form::Plain) => (WIDTH, HEIGHT),
         }
@@ -304,6 +316,7 @@ impl Group {
             actions: self.actions,
             drop: None,
             form: Form::Plain,
+            under: None,
         }
     }
 }
@@ -1284,7 +1297,7 @@ impl RenderOnce for Graph {
             hide: self.on_hide,
         };
         let mut cards = Vec::new();
-        for ((card, out), alpha) in placed.into_iter().zip(tucked).zip(alphas) {
+        for ((mut card, out), alpha) in placed.into_iter().zip(tucked).zip(alphas) {
             if out.is_some() {
                 continue;
             }
@@ -1294,9 +1307,18 @@ impl RenderOnce for Graph {
                     cards.push(chip_element(card.card, (x, y), zoom, alpha, cx));
                     continue;
                 }
-                // The sheets go under the top of the pile, which is a card's height.
-                Form::Pile { .. } => {
+                // The sheets go under the top of the pile, which is a card's height, and the chip
+                // under them.
+                Form::Pile => {
                     cards.extend(sheets((x, y), zoom, alpha, cx));
+                    if let Some(Under { label, run }) = card.card.under.take() {
+                        let chip = Card::new(format!("{}:under", card.card.id), label)
+                            .icon(|size| Icon::new(Glyph::ChevronDown).size(size))
+                            .on_click(move |window, cx| run(window, cx))
+                            .chip();
+                        let at = (x, y + (HEIGHT + SHEETS + UNDER) * zoom);
+                        cards.push(chip_element(chip, at, zoom, alpha, cx));
+                    }
                     HEIGHT
                 }
                 Form::Plain => card.size.1,
@@ -1702,9 +1724,7 @@ fn card_element(
         None => theme.foreground,
     };
     let head_id = ElementId::Name(format!("{}:head", card.id).into());
-    let pile = matches!(card.form, Form::Pile { .. });
-    let cover = card.form == Form::Pile { cover: true };
-    let blue = theme.blue;
+    let pile = card.form == Form::Pile;
     let clickable = card.on_click.is_some();
     let selectable = card.selectable;
     let grab = (hands.camera.clone(), card.id.clone());
@@ -1741,26 +1761,10 @@ fn card_element(
                         .text_color(title)
                         .child(card.title),
                 )
-                .children(card.meta.map(|meta| {
-                    // The cover of a pile says what a click on it does, with a chevron.
-                    if !cover {
-                        return div()
-                            .truncate()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(meta)
-                            .into_any_element();
-                    }
-                    h_flex()
-                        .min_w_0()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(muted)
-                        .group_hover(PILE, move |style| style.text_color(blue))
-                        .child(div().truncate().child(meta))
-                        .child(Icon::new(Glyph::ChevronDown).size(px(12. * zoom)))
-                        .into_any_element()
-                })),
+                .children(
+                    card.meta
+                        .map(|meta| div().truncate().text_xs().text_color(muted).child(meta)),
+                ),
         )
         .children(
             card.badge
@@ -1844,7 +1848,7 @@ fn card_element(
         .when(clickable && !look.open && !look.picked, |el| {
             el.hover(move |style| style.border_color(muted))
         })
-        .when(pile, |el| el.group(PILE).shadow_md())
+        .when(pile, |el| el.shadow_md())
         .when_some(turn, |el, turn| el.on_scroll(turn))
         .child(head)
         .children(drop)

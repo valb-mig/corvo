@@ -314,9 +314,9 @@ impl Overview {
         branches
     }
 
-    // A pile of the files of one kind in a crowded folder. On its cover a click shows them all;
-    // the wheel turns it to each of its files and back to the cover, a click opening the file
-    // it shows.
+    // A pile of the files of one kind in a crowded folder, a Show all chip under it showing them
+    // all whatever it shows. The wheel turns it to each of its files and back to the cover, a
+    // click opening the file it shows; on the cover a click shows them all too.
     fn piled(&self, dir: &Path, pile: &Pile, view: &WeakEntity<Self>) -> Branch {
         let files = pile.files();
         let key = SharedString::from(format!("pile:{}:{}", dir.display(), pile.kind()));
@@ -330,9 +330,7 @@ impl Overview {
                     .unwrap_or_default();
                 let title = format!("{count} {} files", pile.kind());
                 let card = Card::new(key.clone(), title)
-                    .icon(move |size| FileIcon::new(first.clone()).size(size))
-                    .meta("Show all")
-                    .pile(true);
+                    .icon(move |size| FileIcon::new(first.clone()).size(size));
                 clicks(card, Act::Spread(dir.to_path_buf()), view)
             }
             Some(file) => {
@@ -342,16 +340,17 @@ impl Overview {
                 Card::new(key.clone(), name.clone())
                     .icon(move |size| FileIcon::new(name.clone()).size(size))
                     .meta(meta)
-                    .pile(false)
                     .on_click(move |_, cx| {
                         let path = path.clone();
                         opener.update(cx, |_, cx| cx.emit(Event::Open(path))).ok();
                     })
             }
         };
-        let (spread, turner) = (run(Act::Spread(dir.to_path_buf()), view), view.clone());
+        let spread = || run(Act::Spread(dir.to_path_buf()), view);
+        let turner = view.clone();
         let card = card
-            .action("Show all", Glyph::Expand, spread)
+            .pile("Show all", spread())
+            .action("Show all", Glyph::Expand, spread())
             .on_turn(move |by, _, cx| {
                 let key = key.clone();
                 turner
