@@ -44,7 +44,7 @@ Each folder card tells what it holds (`3 folders · 12 files`), and a folder wit
 
 The workspace opens on its home. Putting the code away reads the open folders from disk again. The home comes back as it was left: the project isolated, the folders open, the cards and groups hidden, the cards moved and the groups; what can no longer be read just doesn't come back.
 
-The camera is free, with no edge to stop it: drag the background, or turn the wheel, to move the graph anywhere. Drag a card by its header to move it, with all it holds, wherever reads best; moved cards keep their place while others open and close, and the layout button at the bottom right (shown once something was moved) puts every card back and centres the graph; groups stay, their frames around their cards where the layout puts them. Hold `Ctrl` and turn the wheel to zoom, around the mouse, or use the − / % / + at the bottom right (the % goes back to where it started, at 100%). A drag that ends on a card does not open or close it.
+The camera is free, with no edge to stop it: drag the background, or turn the wheel, to move the graph anywhere. Drag a card by its header to move it, with all it holds, wherever reads best; moved cards keep their place while others open and close, and the layout button at the top left (shown once something was moved) puts every card back and centres the graph; groups stay, their frames around their cards where the layout puts them. Hold `Ctrl` and turn the wheel to zoom, around the mouse, or use the − / % / + at the top left (the % goes back to where it started, at 100%). A drag that ends on a card does not open or close it.
 
 ## Outline
 
