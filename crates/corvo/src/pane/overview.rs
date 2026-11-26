@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use corvo_domain::server::Registry;
-use corvo_domain::{Atlas, Group, Node, Place, Workbench, stack};
+use corvo_domain::{Atlas, Group, Moved, Node, Place, Workbench, stack};
 use corvo_ui::file_icon::{FileIcon, FolderIcon};
 use corvo_ui::graph::{self, Branch, Camera, Card, Graph};
 use corvo_ui::git::tint;
@@ -80,6 +80,16 @@ impl Overview {
     pub fn chart(&mut self, projects: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
         let charted = self.bench.update(cx, |bench, _| bench.chart(projects));
         self.report(charted, window, cx);
+    }
+
+    // Files moved on disk: the folders above them are read again, and those down to a file
+    // that came or changed open, so it shows.
+    pub fn uncover(&mut self, moved: &[Moved], cx: &mut Context<Self>) {
+        let opened = self.bench.update(cx, |bench, _| bench.uncover(moved));
+        if opened {
+            cx.emit(Event::Arranged);
+        }
+        cx.notify();
     }
 
     pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {

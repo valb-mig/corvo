@@ -53,6 +53,15 @@ pub struct Changed {
     pub from: Option<PathBuf>,
 }
 
+// A file whose standing against the last commit changed between two reads of its repository,
+// and whether it is there to show: one that came or changed is, one that went or settled (back
+// as the commit has it, or committed) is not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Moved {
+    pub path: PathBuf,
+    pub shown: bool,
+}
+
 // A repository as git reads it now: where it is, the branch, the commit it is on and what
 // changed since.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -127,6 +136,33 @@ impl Repo {
             .get(path)
             .or_else(|| self.dirs.get(path))
             .copied()
+    }
+
+    // The files that moved since the repository was read before.
+    pub fn moved_since(&self, before: &Repo) -> Vec<Moved> {
+        let mut moved = Vec::new();
+        for changed in &self.changes {
+            if before.files.get(&changed.path) == Some(&changed.change) {
+                continue;
+            }
+            moved.push(Moved {
+                path: changed.path.clone(),
+                shown: changed.change != Change::Deleted,
+            });
+            if let Some(from) = &changed.from {
+                moved.push(Moved {
+                    path: from.clone(),
+                    shown: false,
+                });
+            }
+        }
+        for gone in before.changes.iter().filter(|c| !self.files.contains_key(&c.path)) {
+            moved.push(Moved {
+                path: gone.path.clone(),
+                shown: false,
+            });
+        }
+        moved
     }
 }
 

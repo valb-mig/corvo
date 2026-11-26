@@ -87,3 +87,46 @@ fn holds_only_what_is_under_its_root() {
     assert!(repo.holds(Path::new("/p/src/a.rs")));
     assert!(!repo.holds(Path::new("/q/a.rs")));
 }
+
+#[test]
+fn what_moved_between_two_reads() {
+    let before = Repo::new(
+        "/p",
+        "main",
+        None,
+        vec![
+            changed("/p/a.rs", Change::Modified),
+            changed("/p/b.rs", Change::Untracked),
+            changed("/p/c.rs", Change::Modified),
+        ],
+    );
+    let mut renamed = changed("/p/e.rs", Change::Renamed);
+    renamed.from = Some(PathBuf::from("/p/old.rs"));
+    let after = Repo::new(
+        "/p",
+        "main",
+        None,
+        vec![
+            changed("/p/a.rs", Change::Modified),
+            changed("/p/b.rs", Change::Added),
+            changed("/p/d.rs", Change::Deleted),
+            renamed,
+        ],
+    );
+    let moved: Vec<_> = after
+        .moved_since(&before)
+        .into_iter()
+        .map(|m| (m.path.to_string_lossy().into_owned(), m.shown))
+        .collect();
+    assert_eq!(
+        moved,
+        [
+            ("/p/b.rs", true),
+            ("/p/d.rs", false),
+            ("/p/e.rs", true),
+            ("/p/old.rs", false),
+            ("/p/c.rs", false),
+        ]
+        .map(|(path, shown)| (path.to_owned(), shown))
+    );
+}

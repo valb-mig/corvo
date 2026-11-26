@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use corvo_domain::port::{Depth, Fs, Syntax};
-use corvo_domain::{Arrangement, Content, Lang, Mark, Node, Place, Symbol, SymbolKind, Workbench};
+use corvo_domain::{
+    Arrangement, Content, Lang, Mark, Moved, Node, Place, Symbol, SymbolKind, Workbench,
+};
 
 #[derive(Clone, Default)]
 struct Memory {
@@ -403,4 +405,95 @@ fn restore_leaves_out_a_project_no_longer_linked() {
 
     assert!(bench.atlas().root().is_none());
     assert_eq!(bench.atlas().opened().count(), 0);
+}
+
+// The home with /p open alone, and /p/src/deep, which holds nothing yet, closed.
+fn isolated(fs: &Memory) -> Workbench {
+    fs.dirs
+        .borrow_mut()
+        .get_mut(Path::new("/p/src"))
+        .unwrap()
+        .push(Node::dir("/p/src/deep"));
+    let mut bench = bench(fs.clone());
+    bench.chart(&[PathBuf::from("/p")]).unwrap();
+    bench.isolate(Some(Path::new("/p"))).unwrap();
+    bench
+}
+
+#[test]
+fn a_file_that_came_opens_the_folders_down_to_it() {
+    let fs = project();
+    let mut bench = isolated(&fs);
+    fs.dirs
+        .borrow_mut()
+        .insert("/p/src/deep".into(), vec![Node::file("/p/src/deep/new.rs")]);
+
+    assert!(bench.uncover(&[moved("/p/src/deep/new.rs", true)]));
+
+    let atlas = bench.atlas();
+    assert!(atlas.is_open(Path::new("/p/src")));
+    assert!(atlas.is_open(Path::new("/p/src/deep")));
+    let deep: Vec<_> = atlas.children(Path::new("/p/src/deep")).unwrap().to_vec();
+    assert_eq!(deep, [Node::file("/p/src/deep/new.rs")]);
+}
+
+#[test]
+fn a_file_that_went_leaves_its_folders_as_they_were() {
+    let fs = project();
+    let mut bench = isolated(&fs);
+    fs.dirs
+        .borrow_mut()
+        .get_mut(Path::new("/p"))
+        .unwrap()
+        .retain(|node| node.path() != Path::new("/p/main.rs"));
+
+    assert!(!bench.uncover(&[moved("/p/main.rs", false)]));
+
+    let atlas = bench.atlas();
+    assert!(!atlas.is_open(Path::new("/p/src")));
+    let root: Vec<_> = atlas.children(Path::new("/p")).unwrap().to_vec();
+    assert_eq!(root, [Node::dir("/p/src")]);
+}
+
+#[test]
+fn outside_the_project_open_the_home_stays_as_it_is() {
+    let fs = project();
+    let mut bench = bench(fs.clone());
+    bench
+        .chart(&[PathBuf::from("/p"), PathBuf::from("/q")])
+        .unwrap();
+    bench.isolate(Some(Path::new("/q"))).unwrap();
+
+    assert!(!bench.uncover(&[moved("/p/src/lib.rs", true)]));
+    assert!(!bench.atlas().is_open(Path::new("/p/src")));
+}
+
+#[test]
+fn the_file_tree_reads_its_open_folders_again() {
+    let fs = project();
+    let mut bench = bench(fs.clone());
+    fs.dirs
+        .borrow_mut()
+        .get_mut(Path::new("/p"))
+        .unwrap()
+        .push(Node::file("/p/new.rs"));
+
+    bench.uncover(&[moved("/p/new.rs", true)]);
+
+    let names: Vec<_> = bench
+        .tree()
+        .unwrap()
+        .children(Path::new("/p"))
+        .unwrap()
+        .iter()
+        .map(Node::name)
+        .collect();
+    assert_eq!(names, ["src", "main.rs", "new.rs"]);
+}
+
+fn moved(path: &str, shown: bool) -> Moved {
+    Moved {
+        path: PathBuf::from(path),
+        shown,
+    }
 }

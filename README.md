@@ -71,9 +71,11 @@ The outline comes from tree-sitter (`crates/syntax`), with no language server ne
 
 ## Git
 
-corvo reads git as the dev has it installed (`crates/git`), with no optional locks, so it never stands in the way of the git run in a terminal or by an agent. Each linked project is read for the repository it is in, projects that share one sharing it: its branch, the commit it is on, and what changed since that commit, untracked files included. It is read again when a file is saved, when an agent's reply ends, when the window comes back in front, when the git window opens, and every 3 seconds while the window is in front.
+corvo reads git as the dev has it installed (`crates/git`), with no optional locks, so it never stands in the way of the git run in a terminal or by an agent. Each linked project is read for the repository it is in, projects that share one sharing it: its branch, the commit it is on, and what changed since that commit, untracked files included. It is read again when a file is saved, when an agent's step is done or its reply ends, when the window comes back in front, when the git window opens, and every 3 seconds while the window is in front.
 
 What changed takes a color: green for what is new (added or untracked), blue for what changed (modified or renamed), red for what is gone, amber for a conflict. A changed file shows it in the file tree, with a light fill behind its row, in its tab, and on its card in the home; a folder takes the color of the weightiest change under it, a conflict first, then a change to what was there, then something new.
+
+Files that come, change, go or settle as git reads them, whoever touched them (an agent, a terminal, a commit), show on the home: the folders above them are read again, so a new card shows and a gone one goes, and inside the project open alone the folders down to a file that came or changed open, kept open after. With all the projects shown, only the project's color tells. The file tree reads its open folders again the same way, opening none. The first read of a repository is where things stand, so what had already changed opens nothing; a file git ignores does not open on its own.
 
 In the editor, the text as it is typed, saved or not, is set against the file in the last commit: a bar beside the line numbers marks the lines added (green) and changed (blue), with a light fill behind them, and a red mark sits where lines were taken out; ticks on the scrollbar show where each is. A file the last commit does not have shows all its lines as added, with no fill.
 

@@ -2,8 +2,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use corvo_domain::port::Git;
-use corvo_domain::{Change, Repo};
-use gpui_kit::Context;
+use corvo_domain::{Change, Moved, Repo};
+use gpui_kit::{Context, EventEmitter};
+
+// Files that moved on disk since the read before: came, changed, went or settled. A repository
+// read for the first time is only where things stand.
+pub struct Event(pub Vec<Moved>);
 
 // The repositories of the projects linked, as git last read them, one for each project or for
 // projects that share one. A read runs off the main thread, and one asked for meanwhile runs
@@ -15,6 +19,8 @@ pub struct Repos {
     reading: bool,
     again: bool,
 }
+
+impl EventEmitter<Event> for Repos {}
 
 impl Repos {
     pub fn new(git: Arc<dyn Git>) -> Self {
@@ -63,7 +69,18 @@ impl Repos {
             this.update(cx, |this, cx| {
                 this.reading = false;
                 if repos != this.repos {
+                    let moved: Vec<Moved> = repos
+                        .iter()
+                        .filter_map(|repo| {
+                            let before = this.repos.iter().find(|b| b.root() == repo.root())?;
+                            Some(repo.moved_since(before))
+                        })
+                        .flatten()
+                        .collect();
                     this.repos = repos;
+                    if !moved.is_empty() {
+                        cx.emit(Event(moved));
+                    }
                     cx.notify();
                 }
                 if std::mem::take(&mut this.again) {

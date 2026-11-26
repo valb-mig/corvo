@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::port::{Depth, Fs, Syntax};
 use crate::{
-    Arrangement, Atlas, Content, Lang, Mark, Mention, Node, Place, Symbol, Tabs, Tree, excerpt,
+    Arrangement, Atlas, Content, Lang, Mark, Mention, Moved, Node, Place, Symbol, Tabs, Tree,
+    excerpt,
 };
 
 pub struct Workbench {
@@ -202,6 +203,77 @@ impl Workbench {
         }
         self.atlas
             .rearrange(left.nudges.clone(), left.groups.clone());
+    }
+
+    // Brings files changed on disk into the home and the file trees. The folders above each one
+    // that were read are read again, so what came shows and what went goes; on the home, inside
+    // the project open there, those above a file to show open down to it. A folder that can't be
+    // read any more closes. Says whether a folder opened.
+    pub fn uncover(&mut self, moved: &[Moved]) -> bool {
+        let root = self.atlas.root().map(Path::to_path_buf);
+        let mut reread = BTreeSet::new();
+        let mut opening = BTreeSet::new();
+        for Moved { path, shown } in moved {
+            for dir in path.ancestors().skip(1) {
+                reread.insert(dir.to_path_buf());
+                if *shown
+                    && let Some(root) = &root
+                    && dir.starts_with(root)
+                    && dir != root
+                {
+                    opening.insert(dir.to_path_buf());
+                }
+            }
+        }
+        self.reread_trees(&reread);
+        let Some(root) = root else {
+            return false;
+        };
+        let mut opened = false;
+        // Folders before what is inside them.
+        for dir in reread.iter().filter(|dir| dir.starts_with(&root)) {
+            let open = opening.contains(dir);
+            if !open && !self.atlas.is_loaded(dir) {
+                continue;
+            }
+            let Ok(nodes) = self.fs.list(dir) else {
+                self.atlas.close(dir);
+                continue;
+            };
+            self.atlas.fill(dir, nodes);
+            // A folder that came shows what it holds, as one surveyed does.
+            let fresh: Vec<PathBuf> = self
+                .atlas
+                .children(dir)
+                .unwrap_or_default()
+                .iter()
+                .filter(|node| node.is_dir() && !self.atlas.is_loaded(node.path()))
+                .map(|node| node.path().to_path_buf())
+                .collect();
+            for fresh in fresh {
+                self.list(&fresh).ok();
+            }
+            if open && !self.atlas.is_open(dir) {
+                self.atlas.open(Node::dir(dir));
+                opened = true;
+            }
+        }
+        opened
+    }
+
+    // Each file tree reads again the folders it had read among these.
+    fn reread_trees(&mut self, dirs: &BTreeSet<PathBuf>) {
+        for tree in self.trees.values_mut() {
+            for dir in dirs {
+                if !tree.is_loaded(dir) {
+                    continue;
+                }
+                match self.fs.list(dir) {
+                    Ok(nodes) => tree.fill(dir, nodes),
+                    Err(_) => tree.close(dir),
+                }
+            }
+        }
     }
 
     pub fn rechart(&mut self) -> io::Result<()> {

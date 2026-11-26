@@ -31,7 +31,7 @@ pub use content::Content;
 pub use database::{Engine, Usage, survey};
 pub use doc::Doc;
 pub use excerpt::{Mention, mentions, span};
-pub use git::{Change, Changed, Hunk, Mark as HunkMark, Repo, hunks};
+pub use git::{Change, Changed, Hunk, Mark as HunkMark, Moved, Repo, hunks};
 pub use lang::Lang;
 pub use languages::{Share, languages};
 pub use node::{Kind, Node};

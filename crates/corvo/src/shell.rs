@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use corvo_domain::server::Registry;
-use corvo_domain::{Chats, Share, Uuid, Workbench, Workspaces, agents, languages};
+use corvo_domain::{Chats, Share, Status, Uuid, Workbench, Workspaces, agents, languages};
 use corvo_fs::{JsonChats, JsonOptions, LocalFs};
 use corvo_git::GitCli;
 use corvo_lsp::{Hub, Note};
@@ -34,7 +34,7 @@ use crate::pane::hidden::Hidden;
 use crate::pane::overview::{self, Overview};
 use crate::pane::stack::Stack;
 use crate::pane::structure::{self, Structure};
-use crate::repos::Repos;
+use crate::repos::{self, Repos};
 
 // How often git is read again while the window is in front, for what the agent or a terminal
 // changed.
@@ -124,13 +124,17 @@ impl Shell {
         }
         cx.spawn_in(window, async move |this, cx| {
             while let Some(event) = agent_events.next().await {
-                // A reply that ended may have changed files.
-                let ended = matches!(event, corvo_agent::Event::Ended { .. });
+                // A step done or a reply that ended may have changed files.
+                let touched = match &event {
+                    corvo_agent::Event::Ended { .. } => true,
+                    corvo_agent::Event::Step { patch, .. } => patch.status == Some(Status::Done),
+                    _ => false,
+                };
                 let alive = this.update(cx, |shell, cx| {
                     shell
                         .agents
                         .update(cx, |agents, cx| agents.apply(event, cx));
-                    if ended {
+                    if touched {
                         shell.repos.update(cx, |repos, cx| repos.refresh(cx));
                     }
                 });
@@ -149,6 +153,7 @@ impl Shell {
             cx.subscribe_in(&code, window, Self::on_code),
             cx.subscribe_in(&home, window, Self::on_home),
             cx.subscribe_in(&git, window, Self::on_git),
+            cx.subscribe(&repos, Self::on_moved),
             // The status bar shows the branch, and the home colors what changed.
             cx.observe(&repos, |this, _, cx| {
                 this.home.update(cx, |_, cx| cx.notify());
@@ -374,6 +379,13 @@ impl Shell {
         } else {
             cx.propagate();
         }
+    }
+
+    // Files moved on disk: the home and the file tree read again the folders above them.
+    fn on_moved(&mut self, _: Entity<Repos>, event: &repos::Event, cx: &mut Context<Self>) {
+        let repos::Event(moved) = event;
+        self.home.update(cx, |home, cx| home.uncover(moved, cx));
+        self.files.update(cx, |files, cx| files.refresh(cx));
     }
 
     fn on_show_git(&mut self, _: &ShowGit, window: &mut Window, cx: &mut Context<Self>) {
