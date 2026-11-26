@@ -9,6 +9,8 @@ pub enum Command {
     ShowCode,
     // Brings the git window over the home, or puts it away.
     ShowGit,
+    // Brings the chat window over the home, or puts it away.
+    ShowChat,
     // Puts the code away, back to the home.
     Dismiss,
     // Hides the file tree beside the code, or brings it back.

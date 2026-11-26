@@ -9,7 +9,7 @@ use corvo_domain::{Chats, Share, Uuid, Workbench, Workspaces, agents, languages}
 use corvo_fs::{JsonChats, JsonOptions, LocalFs};
 use corvo_git::GitCli;
 use corvo_lsp::{Hub, Note};
-use corvo_ui::keys::{Dismiss, Save, ShowCode, ShowGit, ToggleTree};
+use corvo_ui::keys::{Dismiss, Save, ShowChat, ShowCode, ShowGit, ToggleTree};
 use corvo_ui::language_icon::LanguageIcon;
 use corvo_ui::notice;
 use corvo_ui::statusbar::{Action, Popup, StatusBar};
@@ -378,6 +378,10 @@ impl Shell {
 
     fn on_show_git(&mut self, _: &ShowGit, window: &mut Window, cx: &mut Context<Self>) {
         self.toggle_git(window, cx);
+    }
+
+    fn on_show_chat(&mut self, _: &ShowChat, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_chat(window, cx);
     }
 
     // The git window comes over the home in the code's place, or goes.
@@ -951,6 +955,7 @@ impl Render for Shell {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::on_show_code))
             .on_action(cx.listener(Self::on_show_git))
+            .on_action(cx.listener(Self::on_show_chat))
             .on_action(cx.listener(Self::on_toggle_tree))
             .on_action(cx.listener(Self::on_dismiss))
             .size_full()
