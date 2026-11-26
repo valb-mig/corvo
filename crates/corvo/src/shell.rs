@@ -153,6 +153,8 @@ impl Shell {
             cx.subscribe_in(&code, window, Self::on_code),
             cx.subscribe_in(&home, window, Self::on_home),
             cx.subscribe_in(&git, window, Self::on_git),
+            // The chat window's bar counts its chats.
+            cx.observe(&chats, |_, _, cx| cx.notify()),
             cx.subscribe(&repos, Self::on_moved),
             // The status bar shows the branch, and the home colors what changed.
             cx.observe(&repos, |this, _, cx| {
@@ -721,7 +723,8 @@ impl Shell {
 
     // The chat window over the home; the agent bar stays over its foot.
     fn chat_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let bar = WindowBar::new(Glyph::MessageSquare, "Chat");
+        let subtitle = self.chats.read(cx).subtitle(cx);
+        let bar = WindowBar::new(Glyph::MessageSquare, "Chat").subtitle(subtitle);
         let body = self.chats.clone().into_any_element();
         self.window("chats", bar, body, Self::close_chat, cx)
     }

@@ -138,6 +138,22 @@ impl ChatWindow {
             .update(cx, |agents, cx| agents.rename(id, &title, cx));
     }
 
+    // The workspace and how many chats it has, or how many a search found, for the window's bar.
+    pub fn subtitle(&self, cx: &App) -> String {
+        let query = self.search.read(cx).value().to_string();
+        let chats = self.agents.read(cx).chats();
+        let count = if query.trim().is_empty() {
+            match chats.list().filter(|chat| !chat.is_archived()).count() {
+                1 => "1 chat".to_owned(),
+                live => format!("{live} chats"),
+            }
+        } else {
+            let found = chats.list().filter(|chat| chat.matches(&query)).count();
+            format!("{found} of {}", chats.len())
+        };
+        format!("{} · {count}", self.workspace)
+    }
+
     fn list(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let query = self.search.read(cx).value().to_string();
@@ -148,12 +164,6 @@ impl ChatWindow {
         let today = midnight(now);
 
         let found: Vec<&Chat> = chats.list().filter(|chat| chat.matches(&query)).collect();
-        let count = if query.trim().is_empty() {
-            let live = chats.list().filter(|chat| !chat.is_archived()).count();
-            format!("{live} chats")
-        } else {
-            format!("{} of {}", found.len(), chats.len())
-        };
 
         let mut groups: Vec<(&str, Vec<&Chat>)> = vec![
             ("Today", Vec::new()),
@@ -244,34 +254,6 @@ impl ChatWindow {
             .border_r_1()
             .border_color(theme.border)
             .bg(theme.sidebar)
-            .child(
-                h_flex()
-                    .h(px(44.))
-                    .flex_shrink_0()
-                    .px_4()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .text_sm()
-                    .child(
-                        Icon::new(Glyph::LayoutGrid)
-                            .size(px(14.))
-                            .text_color(theme.muted_foreground),
-                    )
-                    .child(
-                        div()
-                            .font_weight(FontWeight::MEDIUM)
-                            .truncate()
-                            .child(self.workspace.clone()),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(count),
-                    ),
-            )
             .child(
                 h_flex()
                     .gap_1()

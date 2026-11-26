@@ -16,6 +16,7 @@ type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub struct WindowBar {
     glyph: Glyph,
     title: SharedString,
+    subtitle: Option<SharedString>,
     on_close: Option<Handler>,
 }
 
@@ -24,8 +25,15 @@ impl WindowBar {
         Self {
             glyph,
             title: title.into(),
+            subtitle: None,
             on_close: None,
         }
+    }
+
+    // Muted words beside the name, about what the window holds.
+    pub fn subtitle(mut self, subtitle: impl Into<SharedString>) -> Self {
+        self.subtitle = Some(subtitle.into());
+        self
     }
 
     pub fn on_close(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
@@ -52,6 +60,14 @@ impl RenderOnce for WindowBar {
                     .font_weight(FontWeight::MEDIUM)
                     .child(self.title),
             )
+            .children(self.subtitle.map(|subtitle| {
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(subtitle)
+            }))
             .child(div().flex_1())
             .child(
                 div()
