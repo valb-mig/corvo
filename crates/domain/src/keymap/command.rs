@@ -9,4 +9,6 @@ pub enum Command {
     ShowCode,
     // Puts the code away, back to the home.
     Dismiss,
+    // Hides the file tree beside the code, or brings it back.
+    ToggleTree,
 }

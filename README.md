@@ -54,15 +54,16 @@ The outline comes from tree-sitter (`crates/syntax`), with no language server ne
 
 ## Keys
 
-| Key            | Command           | Scope  |
-| -------------- | ----------------- | ------ |
-| `ctrl-s`       | Save              | global |
-| `ctrl-z`       | Undo              | editor |
-| `ctrl-y`       | Redo              | editor |
-| `ctrl-space`   | Show completions  | editor |
-| `f12`          | Go to definition  | editor |
-| `ctrl-shift-e` | Open the code     | global |
-| `escape`       | Put the code away | global |
+| Key            | Command                    | Scope  |
+| -------------- | -------------------------- | ------ |
+| `ctrl-s`       | Save                       | global |
+| `ctrl-z`       | Undo                       | editor |
+| `ctrl-y`       | Redo                       | editor |
+| `ctrl-space`   | Show completions           | editor |
+| `f12`          | Go to definition           | editor |
+| `ctrl-shift-e` | Open the code              | global |
+| `escape`       | Put the code away          | global |
+| `ctrl-b`       | Hide or show the file tree | global |
 
 `ctrl-click` also goes to definition. Bindings live in `corvo_domain::keymap::Keymap` and reach GPUI through `corvo_ui::keys`.
 
