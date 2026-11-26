@@ -11,6 +11,8 @@ pub enum Command {
     ShowGit,
     // Brings the chat window over the home, or puts it away.
     ShowChat,
+    // Opens the palette of the window in front, or closes it.
+    OpenPalette,
     // Puts the code away, back to the home.
     Dismiss,
     // Hides the file tree beside the code, or brings it back.

@@ -9,14 +9,15 @@ use corvo_domain::{Chats, Share, Status, Uuid, Workbench, Workspaces, agents, la
 use corvo_fs::{JsonChats, JsonOptions, LocalFs};
 use corvo_git::GitCli;
 use corvo_lsp::{Hub, Note};
-use corvo_ui::keys::{Dismiss, Save, ShowChat, ShowCode, ShowGit, ToggleTree};
+use corvo_ui::keys::{Dismiss, OpenPalette, Save, ShowChat, ShowCode, ShowGit, ToggleTree};
 use corvo_ui::language_icon::LanguageIcon;
 use corvo_ui::notice;
 use corvo_ui::statusbar::{Action, Popup, StatusBar};
-use corvo_ui::window_bar::WindowBar;
+use corvo_ui::window_bar::{PaletteField, WindowBar};
 use futures::StreamExt as _;
 use gpui_kit::assets::IconName as Glyph;
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::command::{Command, CommandItem, CommandState};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, ElementId, Entity, FocusHandle,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, PathPromptOptions,
@@ -25,6 +26,7 @@ use gpui_kit::{
 use lsp_types::Position;
 
 use crate::agents::{self, Agents};
+use crate::palette::{self, Offer};
 use crate::pane::chats::ChatWindow;
 use crate::pane::code::{self, Code};
 use crate::pane::dock::{self, Dock, Project};
@@ -70,6 +72,12 @@ pub struct Shell {
     repos: Entity<Repos>,
     git: Entity<GitWindow>,
     gitting: bool,
+    // The palette of the window in front, what had the keys before it opened, and the files of
+    // each project for the code's palette, walked the first time it is asked.
+    palette: Entity<CommandState>,
+    paletting: bool,
+    before: Option<FocusHandle>,
+    index: HashMap<PathBuf, Rc<Vec<PathBuf>>>,
     // The file tree beside the code, hidden with ctrl-b.
     tree: bool,
     _subs: Vec<Subscription>,
@@ -118,7 +126,8 @@ impl Shell {
         let start = project(cx);
         agents.read(cx).warm(&start);
         let dock = cx.new(|cx| Dock::new(agents.clone(), project.clone(), window, cx));
-        let chats = cx.new(|cx| ChatWindow::new(agents.clone(), project, name.into(), window, cx));
+        let chats = cx.new(|cx| ChatWindow::new(agents.clone(), project, name.into(), cx));
+        let palette = cx.new(|cx| CommandState::new(window, cx));
         if let Some(trouble) = trouble {
             notice::error(trouble, window, cx);
         }
@@ -241,6 +250,10 @@ impl Shell {
             repos,
             git,
             gitting: false,
+            palette,
+            paletting: false,
+            before: None,
+            index: HashMap::new(),
             tree: true,
             _subs: subs,
         };
@@ -327,6 +340,7 @@ impl Shell {
 
     // Puts the code away, back to the home.
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.paletting = false;
         if self.code.read(cx).is_shown() {
             self.code.update(cx, |code, cx| code.dismiss(window, cx));
         }
@@ -372,7 +386,9 @@ impl Shell {
     }
 
     fn on_dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        if self.code.read(cx).is_shown() {
+        if self.paletting {
+            self.close_palette(window, cx);
+        } else if self.code.read(cx).is_shown() {
             self.dismiss(window, cx);
         } else if self.chatting {
             self.close_chat(window, cx);
@@ -388,6 +404,77 @@ impl Shell {
         let repos::Event(moved) = event;
         self.home.update(cx, |home, cx| home.uncover(moved, cx));
         self.files.update(cx, |files, cx| files.refresh(cx));
+        // The files listed for the palette are walked again when next asked.
+        self.index.clear();
+        if self.paletting {
+            self.walk(cx);
+        }
+    }
+
+    fn on_open_palette(&mut self, _: &OpenPalette, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_palette(window, cx);
+    }
+
+    fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.paletting {
+            self.close_palette(window, cx);
+        } else {
+            self.open_palette(window, cx);
+        }
+    }
+
+    // Opens the palette of the window in front, with nothing typed; with only the home, none.
+    fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !(self.code.read(cx).is_shown() || self.chatting || self.gitting) {
+            return;
+        }
+        self.before = window.focused(cx);
+        self.paletting = true;
+        self.palette
+            .update(cx, |palette, cx| palette.set_query("", window, cx));
+        let palette = self.palette.clone();
+        palette.update(cx, |palette, cx| palette.focus(window, cx));
+        self.walk(cx);
+        cx.notify();
+    }
+
+    // Closes the palette, the keys going back where they were.
+    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.paletting {
+            return;
+        }
+        self.paletting = false;
+        match self.before.take() {
+            Some(before) => before.focus(window, cx),
+            None => self.focus.focus(window, cx),
+        }
+        cx.notify();
+    }
+
+    // Walks the files of the project in front off the main thread, unless they were walked.
+    fn walk(&mut self, cx: &mut Context<Self>) {
+        const MOST: usize = 20_000;
+        let Some(root) = self.bench.read(cx).project().map(Path::to_path_buf) else {
+            return;
+        };
+        if self.index.contains_key(&root) {
+            return;
+        }
+        // Empty while it walks, so it walks once.
+        self.index.insert(root.clone(), Rc::default());
+        let task = cx.background_executor().spawn({
+            let root = root.clone();
+            async move { corvo_fs::files(&root, MOST) }
+        });
+        cx.spawn(async move |this, cx| {
+            let files = task.await;
+            this.update(cx, |this, cx| {
+                this.index.insert(root, Rc::new(files));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn on_show_git(&mut self, _: &ShowGit, window: &mut Window, cx: &mut Context<Self>) {
@@ -416,6 +503,7 @@ impl Shell {
 
     fn close_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.gitting = false;
+        self.paletting = false;
         self.focus.focus(window, cx);
         cx.notify();
     }
@@ -454,6 +542,7 @@ impl Shell {
 
     fn close_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.chatting = false;
+        self.paletting = false;
         self.dock
             .update(cx, |dock, cx| dock.set_chatting(false, cx));
         self.focus.focus(window, cx);
@@ -718,7 +807,19 @@ impl Shell {
             .child(div().flex_1().min_w_0().h_full().child(self.code.clone()))
             .children(side);
         let bar = WindowBar::new(Glyph::Code, "Code");
-        self.window("code", bar, body.into_any_element(), Self::dismiss, cx)
+        let offers = self.paletting.then(|| {
+            let query = self.palette.read(cx).query(cx).to_string();
+            let files = self
+                .bench
+                .read(cx)
+                .project()
+                .and_then(|root| self.index.get(root))
+                .cloned()
+                .unwrap_or_default();
+            palette::code(&self.code, &self.bench, &files, &query, cx)
+        });
+        let ask = ("Open a file", offers);
+        self.window("code", bar, body.into_any_element(), ask, Self::dismiss, cx)
     }
 
     // The chat window over the home; the agent bar stays over its foot.
@@ -726,27 +827,47 @@ impl Shell {
         let subtitle = self.chats.read(cx).subtitle(cx);
         let bar = WindowBar::new(Glyph::MessageSquare, "Chat").subtitle(subtitle);
         let body = self.chats.clone().into_any_element();
-        self.window("chats", bar, body, Self::close_chat, cx)
+        let offers = self.paletting.then(|| {
+            let query = self.palette.read(cx).query(cx).to_string();
+            palette::chats(&self.chats, &self.agents, &query, cx)
+        });
+        let ask = ("Search chats or start one", offers);
+        self.window("chats", bar, body, ask, Self::close_chat, cx)
     }
 
     fn git_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let bar = WindowBar::new(Glyph::GitBranch, "Git");
         let body = self.git.clone().into_any_element();
-        self.window("git", bar, body, Self::close_git, cx)
+        let offers = self.paletting.then(|| {
+            let query = self.palette.read(cx).query(cx).to_string();
+            palette::git(&self.git, &self.repos, &query, cx)
+        });
+        let ask = ("Find a changed file", offers);
+        self.window("git", bar, body, ask, Self::close_git, cx)
     }
 
-    // A window over the home, which steps back behind a dimmed layer: its bar along the top and
-    // what it holds under it. Esc, the bar's × or a click on the dimmed home puts it away.
+    // A window over the home, which steps back behind a dimmed layer: its bar along the top, with
+    // the field of its palette in the middle, and what it holds under it; the palette, while open,
+    // under the bar with what it offers. Esc, the bar's × or a click on the dimmed home puts the
+    // window away.
     fn window(
         &self,
         id: &'static str,
         bar: WindowBar,
         body: AnyElement,
+        (placeholder, offers): (&'static str, Option<Vec<Offer>>),
         close: fn(&mut Self, &mut Window, &mut Context<Self>),
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let palette = offers.map(|offers| self.palette(placeholder, offers, cx));
         let theme = cx.theme();
         let (dimmed, closer) = (cx.entity().downgrade(), cx.entity().downgrade());
+        let opener = cx.entity().downgrade();
+        let field = PaletteField::new(placeholder).on_click(move |window, cx| {
+            opener
+                .update(cx, |shell, cx| shell.toggle_palette(window, cx))
+                .ok();
+        });
         let scrim = div()
             .id(ElementId::Name(format!("{id}-scrim").into()))
             .absolute()
@@ -760,7 +881,7 @@ impl Shell {
                     .update(cx, |shell, cx| close(shell, window, cx))
                     .ok();
             });
-        let bar = bar.on_close(move |window, cx| {
+        let bar = bar.center(field).on_close(move |window, cx| {
             closer
                 .update(cx, |shell, cx| close(shell, window, cx))
                 .ok();
@@ -779,13 +900,95 @@ impl Shell {
             .border_color(theme.border)
             .bg(theme.background)
             .child(bar)
-            .child(div().flex_1().min_h_0().child(body));
+            .child(div().flex_1().min_h_0().child(body))
+            .children(palette);
         div()
             .absolute()
             .top_0()
             .left_0()
             .size_full()
             .child(scrim)
+            .child(panel)
+    }
+
+    // The palette under the bar: a search over what the window offers, the arrows and Enter or a
+    // click to pick. A click anywhere else closes it.
+    fn palette(
+        &self,
+        placeholder: &'static str,
+        offers: Vec<Offer>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let theme = cx.theme();
+        let items: Vec<CommandItem> = offers.iter().map(item).collect();
+        let offers = Rc::new(offers);
+        let shell = cx.entity().downgrade();
+        let (asker, picker, leaver) = (shell.clone(), shell.clone(), shell.clone());
+        let command = Command::new(&self.palette)
+            .filterable(false)
+            .placeholder(placeholder)
+            .bordered(false)
+            .max_h(px(380.))
+            .items(items)
+            .empty(|_, _, _| "Nothing found")
+            .on_query(move |_, _, cx| {
+                asker.update(cx, |_, cx| cx.notify()).ok();
+            })
+            .on_confirm(move |at, window, cx| {
+                let Some(run) = offers.get(at.row).map(|offer| offer.run.clone()) else {
+                    return;
+                };
+                picker
+                    .update(cx, |shell, cx| shell.close_palette(window, cx))
+                    .ok();
+                run(window, cx);
+            })
+            // Esc with nothing typed: closed once the key is done with, unless Esc closed it.
+            .on_cancel(move |window, cx| {
+                let leaver = leaver.clone();
+                window.defer(cx, move |window, cx| {
+                    leaver
+                        .update(cx, |shell, cx| shell.close_palette(window, cx))
+                        .ok();
+                });
+            });
+        let catcher = div()
+            .id("palette-catcher")
+            .absolute()
+            .top(px(44.))
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                shell
+                    .update(cx, |shell, cx| shell.close_palette(window, cx))
+                    .ok();
+            });
+        let panel = div()
+            .absolute()
+            .top(px(40.))
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .w(px(560.))
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.popover)
+                    .shadow_lg()
+                    .overflow_hidden()
+                    .child(command),
+            );
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(catcher)
             .child(panel)
     }
 
@@ -914,6 +1117,7 @@ impl Render for Shell {
             .on_action(cx.listener(Self::on_show_code))
             .on_action(cx.listener(Self::on_show_git))
             .on_action(cx.listener(Self::on_show_chat))
+            .on_action(cx.listener(Self::on_open_palette))
             .on_action(cx.listener(Self::on_toggle_tree))
             .on_action(cx.listener(Self::on_dismiss))
             .size_full()
@@ -968,5 +1172,30 @@ fn focused(bench: Entity<Workbench>, spaces: Entity<Workspaces>, id: Uuid) -> Pr
             })
             .or_else(std::env::home_dir)
             .unwrap_or_else(std::env::temp_dir)
+    })
+}
+
+// An offer as a row of the palette: its icon, its name, and what tells it apart, muted.
+fn item(offer: &Offer) -> CommandItem {
+    let (glyph, label, detail) = (offer.glyph, offer.label.clone(), offer.detail.clone());
+    CommandItem::new().label(label.clone()).child(move |_, cx| {
+        let theme = cx.theme();
+        h_flex()
+            .min_w_0()
+            .gap_2()
+            .child(
+                Icon::new(glyph)
+                    .small()
+                    .text_color(theme.muted_foreground),
+            )
+            .child(div().flex_shrink_0().child(label.clone()))
+            .children(detail.clone().map(|detail| {
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(detail)
+            }))
     })
 }

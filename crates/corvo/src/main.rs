@@ -2,6 +2,7 @@ mod agents;
 mod assist;
 mod frame;
 mod home;
+mod palette;
 mod pane;
 mod repos;
 mod shell;

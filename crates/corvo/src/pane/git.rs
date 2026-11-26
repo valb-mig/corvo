@@ -79,7 +79,7 @@ impl GitWindow {
         self.read(cx);
     }
 
-    fn pick(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    pub fn pick(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.picked = Some(path);
         self.read(cx);
     }

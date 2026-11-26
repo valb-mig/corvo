@@ -12,7 +12,7 @@ cargo run
 
 corvo opens on the list of workspaces, where you add, remove or enter one. A workspace links any number of project folders, none required.
 
-Inside a workspace the window holds its home. The code comes over it, with the home dimmed behind: the open files in tabs, and on the right a sidebar with the file tree of a project (the one open in the home, or the one the active tab belongs to) over the structure of the active file (see Outline). A click on a file's card in the home opens it there, and so does a file picked in the tree; **×**, `Escape` or a click on the dimmed home puts the code away, its tabs kept for the next time. Closing the last tab leaves the code open, empty, with a note to pick a file in the tree. The code, like the chat and git windows, has a bar along its top with its name, `Esc` and a **×**. Projects are linked and unlinked from the home: the **Link folder…** button of the status bar links one, and right clicking a project card gives **Unlink**. Open tabs belong to the workspace, so switching projects only changes the tree.
+Inside a workspace the window holds its home. The code comes over it, with the home dimmed behind: the open files in tabs, and on the right a sidebar with the file tree of a project (the one open in the home, or the one the active tab belongs to) over the structure of the active file (see Outline). A click on a file's card in the home opens it there, and so does a file picked in the tree; **×**, `Escape` or a click on the dimmed home puts the code away, its tabs kept for the next time. Closing the last tab leaves the code open, empty, with a note to pick a file in the tree. The code, like the chat and git windows, has a bar along its top with its name, `Esc` and a **×**, and in its middle the field of the window's palette: click it or press `ctrl-k`, type, and pick with the arrows and `Enter` or a click (`Esc` or a click elsewhere closes it). The code's palette opens a file: the open ones first, then those of the project in front, by their path in it, leaving out what git ignores. Projects are linked and unlinked from the home: the **Link folder…** button of the status bar links one, and right clicking a project card gives **Unlink**. Open tabs belong to the workspace, so switching projects only changes the tree.
 
 A status bar runs along the bottom of the window. On the left, the code button brings the code over the home with the tabs left open, or with none and a note to pick a file in the tree; with the code shown, it puts it away. Next to it, a button links a folder to the workspace, then the count of cards hidden from the home (see Home), then the branch of the project in front and how many files changed in its repository, which opens the git window (see Git). On the right it shows the languages of the project open in the home, the logos of the three with the most files, in their brand colors (from [Simple Icons](https://simpleicons.org), CC0, in `crates/ui/assets/languages`; a color too dark for the dark theme is lifted); click it for all of them, each with its files and share. They are counted in the background when a project is opened in the home, from the extensions of its files, leaving out `node_modules`, `target`, `vendor`, `dist` and `build`; data, docs and settings (JSON, YAML, TOML, Markdown) are not counted as languages.
 
@@ -54,18 +54,19 @@ The outline comes from tree-sitter (`crates/syntax`), with no language server ne
 
 ## Keys
 
-| Key            | Command                               | Scope  |
-| -------------- | ------------------------------------- | ------ |
-| `ctrl-s`       | Save                                  | global |
-| `ctrl-z`       | Undo                                  | editor |
-| `ctrl-y`       | Redo                                  | editor |
-| `ctrl-space`   | Show completions                      | editor |
-| `f12`          | Go to definition                      | editor |
-| `ctrl-shift-e` | Open the code                         | global |
-| `ctrl-shift-g` | Open or close the git window          | global |
-| `ctrl-shift-c` | Open or close the chat window         | global |
-| `escape`       | Put the code, chat or git window away | global |
-| `ctrl-b`       | Hide or show the file tree            | global |
+| Key            | Command                                   | Scope  |
+| -------------- | ----------------------------------------- | ------ |
+| `ctrl-s`       | Save                                      | global |
+| `ctrl-z`       | Undo                                      | editor |
+| `ctrl-y`       | Redo                                      | editor |
+| `ctrl-space`   | Show completions                          | editor |
+| `f12`          | Go to definition                          | editor |
+| `ctrl-shift-e` | Open the code                             | global |
+| `ctrl-shift-g` | Open or close the git window              | global |
+| `ctrl-shift-c` | Open or close the chat window             | global |
+| `ctrl-k`       | Open or close the window's palette        | global |
+| `escape`       | Close the palette, or put the window away | global |
+| `ctrl-b`       | Hide or show the file tree                | global |
 
 `ctrl-click` also goes to definition. Bindings live in `corvo_domain::keymap::Keymap` and reach GPUI through `corvo_ui::keys`.
 
@@ -79,7 +80,7 @@ Files that come, change, go or settle as git reads them, whoever touched them (a
 
 In the editor, the text as it is typed, saved or not, is set against the file in the last commit: a bar beside the line numbers marks the lines added (green) and changed (blue), with a light fill behind them, and a red mark sits where lines were taken out; ticks on the scrollbar show where each is. A file the last commit does not have shows all its lines as added, with no fill.
 
-The git window (`ctrl-shift-g`, or the branch in the status bar) takes turns with the code and the chats over the home. On the left, the changed files of each repository under its name, branch and count, each with its letter (`A`, `M`, `D`, `R`, `U`, `!`); on the right, the patch of the file picked, from the last commit to the file on disk. **Open**, or a double click on a file, opens it in the code.
+The git window (`ctrl-shift-g`, or the branch in the status bar) takes turns with the code and the chats over the home. On the left, the changed files of each repository under its name, branch and count, each with its letter (`A`, `M`, `D`, `R`, `U`, `!`); on the right, the patch of the file picked, from the last commit to the file on disk. **Open**, or a double click on a file, opens it in the code. The window's palette finds a changed file by its path and shows its patch.
 
 ## Language servers
 
@@ -108,7 +109,7 @@ The agent bar sits at the foot of the window, centred, over the home and over th
 
 The agent button shows the agent, its model, its effort and its mode, the mode in amber when it goes on without asking (bypass, YOLO, full access). It opens a picker upwards: the agents on the left, only those installed (and the chat's own, when it is gone), and on the right what the agent offers for the chat's session: its models, its effort levels and its modes. A section the agent does not offer is not there. While a chat's own session starts, the picker shows what the agent offered its last session, kept between runs in `$XDG_CONFIG_HOME/corvo/agents.json`, and what is picked meanwhile reaches the session once it is there. Picking another agent in a chat with messages keeps the chat: the new agent is told the conversation so far, and a line marks the switch.
 
-The chat button, or `ctrl-shift-c`, opens the chat window, which takes turns with the code over the home (`Esc`, the **×** or a click on the dimmed home puts it away). On the left are the chats of the workspace, grouped by day, each with its agent, when it last spoke and how it is doing. Above them, a search through titles and messages, and a new chat; the window's bar names the workspace and counts its chats, or what a search found. Right click a chat, or its **⋯**, to **Rename**, **Archive** (archived chats fold into their own section, and come back with **Unarchive**) or **Delete…**, which asks first. On the right is the picked chat: the dev's messages, and each reply as the agent's words and the steps it took (read, edit, search, run…). A step with a diff or an output opens with a click, and a step the agent asks about carries its answers (**Allow**, **Reject**…). A chat is named after its first message.
+The chat button, or `ctrl-shift-c`, opens the chat window, which takes turns with the code over the home (`Esc`, the **×** or a click on the dimmed home puts it away). On the left are the chats of the workspace, grouped by day, each with its agent, when it last spoke and how it is doing. The window's bar names the workspace and counts its chats; its palette starts a new chat or finds one by its title and messages. Right click a chat, or its **⋯**, to **Rename**, **Archive** (archived chats fold into their own section, and come back with **Unarchive**) or **Delete…**, which asks first. On the right is the picked chat: the dev's messages, and each reply as the agent's words and the steps it took (read, edit, search, run…). A step with a diff or an output opens with a click, and a step the agent asks about carries its answers (**Allow**, **Reject**…). A chat is named after its first message.
 
 Agents speak the [Agent Client Protocol](https://agentclientprotocol.com) over their stdio (`crates/agent`). One process per agent serves all its chats. The agent the bar shows starts in the background when the workspace opens, and any other the first time a chat needs it; corvo answers only for permissions: the agent reads, writes and runs with its own tools. Its stderr goes to `$XDG_CACHE_HOME/corvo/agents/<agent>.log`. A chat keeps its agent's session, to load it back the next time when the agent can; when it cannot, a new session is told the conversation. An agent counts as installed when its command is on the `PATH`, and for those started through `npx`, its own CLI too (`claude`, `codex`). An agent not installed shows how to install it. Each agent carries its logo in its brand color (from [Simple Icons](https://simpleicons.org), CC0, and [LobeHub Icons](https://github.com/lobehub/lobe-icons), MIT, in `crates/ui/assets/agents`).
 

@@ -44,6 +44,14 @@ fn ctrl_shift_c_shows_the_chats_from_anywhere() {
 }
 
 #[test]
+fn ctrl_k_opens_the_palette_from_anywhere() {
+    let keymap = Keymap::default();
+    let open = keymap.bindings().iter().find(|b| b.chord() == "ctrl-k");
+    assert_eq!(open.map(Binding::command), Some(Command::OpenPalette));
+    assert_eq!(open.map(Binding::scope), Some(Scope::Global));
+}
+
+#[test]
 fn ctrl_b_toggles_the_tree_from_anywhere() {
     let keymap = Keymap::default();
     let toggle = keymap.bindings().iter().find(|b| b.chord() == "ctrl-b");

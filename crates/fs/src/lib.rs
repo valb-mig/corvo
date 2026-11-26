@@ -16,6 +16,23 @@ pub use store::JsonStore;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LocalFs;
 
+// The files under a folder, at most so many, leaving out what git ignores; sorted, for a palette
+// to search.
+pub fn files(root: &Path, most: usize) -> Vec<std::path::PathBuf> {
+    let walk = WalkBuilder::new(root)
+        .hidden(false)
+        .filter_entry(|entry| entry.file_name() != ".git")
+        .build();
+    let mut files: Vec<_> = walk
+        .flatten()
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+        .map(|entry| entry.into_path())
+        .take(most)
+        .collect();
+    files.sort();
+    files
+}
+
 impl Fs for LocalFs {
     fn list(&self, dir: &Path) -> io::Result<Vec<Node>> {
         let walk = WalkBuilder::new(dir)

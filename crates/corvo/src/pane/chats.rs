@@ -24,13 +24,13 @@ const OUTPUT: usize = 60;
 // The width of the list of chats.
 const LIST: f32 = 232.;
 
-// The chats of the workspace in a window over the home: the list on the left, with a search and
-// a new chat, and the picked chat's conversation on the right, the agent bar over its foot.
+// The chats of the workspace in a window over the home: the list on the left and the picked
+// chat's conversation on the right, the agent bar over its foot. Its palette searches the chats
+// and starts a new one.
 pub struct ChatWindow {
     agents: Entity<Agents>,
     project: Project,
     workspace: SharedString,
-    search: Entity<field::State>,
     renaming: Option<(u64, Entity<field::State>, Subscription)>,
     deleting: Option<u64>,
     archived: bool,
@@ -46,10 +46,8 @@ impl ChatWindow {
         agents: Entity<Agents>,
         project: Project,
         workspace: SharedString,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx.new(|cx| field::state("Search chats", window, cx));
         let subs = vec![
             cx.observe(&agents, |this: &mut Self, _, cx| {
                 // The conversation follows what comes in, unless the dev scrolled up to read.
@@ -58,17 +56,11 @@ impl ChatWindow {
                 }
                 cx.notify();
             }),
-            cx.subscribe(&search, |_, _, event: &field::Event, cx| {
-                if matches!(event, field::Event::Change) {
-                    cx.notify();
-                }
-            }),
         ];
         Self {
             agents,
             project,
             workspace,
-            search,
             renaming: None,
             deleting: None,
             archived: false,
@@ -91,13 +83,13 @@ impl ChatWindow {
         max - at < px(48.)
     }
 
-    fn pick(&mut self, id: u64, cx: &mut Context<Self>) {
+    pub fn pick(&mut self, id: u64, cx: &mut Context<Self>) {
         self.deleting = None;
         self.agents.update(cx, |agents, cx| agents.pick(id, cx));
         self.scroll.scroll_to_bottom();
     }
 
-    fn new_chat(&mut self, cx: &mut Context<Self>) {
+    pub fn new_chat(&mut self, cx: &mut Context<Self>) {
         let project = (self.project)(cx);
         self.agents
             .update(cx, |agents, cx| agents.new_chat(&project, cx));
@@ -138,32 +130,23 @@ impl ChatWindow {
             .update(cx, |agents, cx| agents.rename(id, &title, cx));
     }
 
-    // The workspace and how many chats it has, or how many a search found, for the window's bar.
+    // The workspace and how many chats it has, for the window's bar.
     pub fn subtitle(&self, cx: &App) -> String {
-        let query = self.search.read(cx).value().to_string();
         let chats = self.agents.read(cx).chats();
-        let count = if query.trim().is_empty() {
-            match chats.list().filter(|chat| !chat.is_archived()).count() {
-                1 => "1 chat".to_owned(),
-                live => format!("{live} chats"),
-            }
-        } else {
-            let found = chats.list().filter(|chat| chat.matches(&query)).count();
-            format!("{found} of {}", chats.len())
+        let count = match chats.list().filter(|chat| !chat.is_archived()).count() {
+            1 => "1 chat".to_owned(),
+            live => format!("{live} chats"),
         };
         format!("{} · {count}", self.workspace)
     }
 
     fn list(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
-        let query = self.search.read(cx).value().to_string();
         let agents = self.agents.read(cx);
         let chats = agents.chats();
         let active = chats.active_id();
         let now = now();
         let today = midnight(now);
-
-        let found: Vec<&Chat> = chats.list().filter(|chat| chat.matches(&query)).collect();
 
         let mut groups: Vec<(&str, Vec<&Chat>)> = vec![
             ("Today", Vec::new()),
@@ -171,9 +154,9 @@ impl ChatWindow {
             ("Earlier", Vec::new()),
         ];
         let mut archived = Vec::new();
-        for chat in &found {
+        for chat in chats.list() {
             if chat.is_archived() {
-                archived.push(*chat);
+                archived.push(chat);
             } else if chat.updated() >= today {
                 groups[0].1.push(chat);
             } else if chat.updated() >= today.saturating_sub(86_400) {
@@ -191,11 +174,11 @@ impl ChatWindow {
             }
             rows.push(group(name, cx).into_any_element());
             for chat in items {
-                rows.push(self.row(chat, active, &query, now, &view, cx));
+                rows.push(self.row(chat, active, now, &view, cx));
             }
         }
         if !archived.is_empty() {
-            let open = self.archived || !query.trim().is_empty();
+            let open = self.archived;
             let toggle = view.clone();
             rows.push(
                 div()
@@ -230,23 +213,11 @@ impl ChatWindow {
             );
             if open {
                 for chat in archived {
-                    rows.push(self.row(chat, active, &query, now, &view, cx));
+                    rows.push(self.row(chat, active, now, &view, cx));
                 }
             }
         }
-        if rows.is_empty() && !query.trim().is_empty() {
-            rows.push(
-                div()
-                    .py_4()
-                    .text_center()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child(format!("No chats match “{}”", query.trim()))
-                    .into_any_element(),
-            );
-        }
 
-        let fresh = view.clone();
         v_flex()
             .w(px(LIST))
             .h_full()
@@ -255,38 +226,13 @@ impl ChatWindow {
             .border_color(theme.border)
             .bg(theme.sidebar)
             .child(
-                h_flex()
-                    .gap_1()
-                    .px_2()
-                    .pt_3()
-                    .pb_1()
-                    .child(
-                        div().flex_1().min_w_0().child(
-                            Input::new(&self.search).small().prefix(
-                                Icon::new(Glyph::Search)
-                                    .size(px(13.))
-                                    .text_color(theme.muted_foreground),
-                            ),
-                        ),
-                    )
-                    .child(
-                        Button::new("new-chat")
-                            .ghost()
-                            .small()
-                            .icon(Glyph::Plus)
-                            .tooltip("New chat")
-                            .on_click(move |_, _, cx| {
-                                fresh.update(cx, |this, cx| this.new_chat(cx)).ok();
-                            }),
-                    ),
-            )
-            .child(
                 div()
                     .id("chat-list")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
                     .px_2()
+                    .pt_1()
                     .pb_3()
                     .children(rows),
             )
@@ -296,7 +242,6 @@ impl ChatWindow {
         &self,
         chat: &Chat,
         active: Option<u64>,
-        query: &str,
         now: u64,
         view: &WeakEntity<Self>,
         cx: &App,
@@ -365,7 +310,7 @@ impl ChatWindow {
                 )
                 .into_any_element()
         } else {
-            status(chat, query, cx)
+            status(chat, cx)
         };
 
         let menu = {
@@ -904,17 +849,14 @@ impl Render for ChatWindow {
     }
 }
 
-// How a chat is doing, under its title; with a search, where it matched.
-fn status(chat: &Chat, query: &str, cx: &App) -> AnyElement {
+// How a chat is doing, under its title.
+fn status(chat: &Chat, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let line = h_flex()
         .gap_1p5()
         .min_w_0()
         .text_xs()
         .text_color(theme.muted_foreground);
-    if let Some((text, _)) = chat.snippet(query) {
-        return line.child(div().truncate().child(text)).into_any_element();
-    }
     let Some(reply) = chat.last_reply() else {
         return line.child("No messages yet").into_any_element();
     };
