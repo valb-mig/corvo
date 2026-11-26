@@ -144,27 +144,46 @@ fn spread_out_the_rest_shows_whole_and_says_how_many_would_pile() {
 
 #[test]
 fn a_crowded_folder_with_nothing_to_pile_has_nothing_to_spread() {
-    let mut names_in: Vec<String> = (0..CROWD).map(|ix| format!("d{ix:02}/")).collect();
-    names_in.extend(["a.rs".to_owned(), "b.md".to_owned()]);
-    let nodes = folder(&names_in.iter().map(String::as_str).collect::<Vec<_>>());
+    let nodes = folder(&["src/", "a.rs", "b.rs", "c.md", "d.toml"]);
 
     let piled = column(&nodes, changed(&[]), false);
     let spread = column(&nodes, changed(&[]), true);
 
-    assert_eq!(names(&piled)[1], ["a.rs", "b.md"]);
+    assert_eq!(names(&piled)[1], ["a.rs", "b.rs", "c.md", "d.toml"]);
     assert_eq!(piled, spread);
     assert_eq!(spread.spread, None);
 }
 
 #[test]
+fn one_file_more_than_crowd_makes_a_pile() {
+    let files = sources(CROWD + 1);
+    let nodes = folder(&files.iter().map(String::as_str).collect::<Vec<_>>());
+
+    let column = column(&nodes, changed(&[]), false);
+
+    assert_eq!(names(&column), [vec![format!("[Rust × {}]", CROWD + 1)]]);
+}
+
+#[test]
+fn folders_do_not_crowd_a_folder() {
+    let mut names_in: Vec<String> = (0..8).map(|ix| format!("d{ix}/")).collect();
+    names_in.extend(sources(CROWD));
+    let nodes = folder(&names_in.iter().map(String::as_str).collect::<Vec<_>>());
+
+    let column = column(&nodes, changed(&[]), false);
+
+    assert_eq!(names(&column)[1], sources(CROWD));
+}
+
+#[test]
 fn changed_files_are_never_piled() {
-    let files = sources(CROWD + 2);
+    let files = sources(7);
     let nodes = folder(&files.iter().map(String::as_str).collect::<Vec<_>>());
 
     let column = column(&nodes, |node| node.name() < "m03", false);
 
     assert_eq!(
         names(&column),
-        [vec!["m00.rs", "m01.rs", "m02.rs"], vec!["[Rust × 9]"]]
+        [vec!["m00.rs", "m01.rs", "m02.rs"], vec!["[Rust × 4]"]]
     );
 }

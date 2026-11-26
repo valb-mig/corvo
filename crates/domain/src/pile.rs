@@ -7,8 +7,8 @@ use crate::{Node, language};
 // language or extension, the biggest first; a kind with too few files stays loose, and so does a
 // file with no extension. Spread out, the rest shows whole again.
 
-// A folder holding more than this many cards is crowded.
-pub const CROWD: usize = 10;
+// A folder holding more than this many files is crowded; its folders don't count.
+pub const CROWD: usize = 3;
 // Fewer files of a kind than this don't make a pile.
 pub const FEW: usize = 3;
 
@@ -56,7 +56,8 @@ pub fn column(children: &[Node], changed: impl Fn(&Node) -> bool, spread: bool) 
         .filter(|node| !node.is_dir())
         .partition(|node| changed(node));
     let changed = changed.into_iter().cloned().map(Item::Node).collect();
-    let (loose, piles) = if children.len() > CROWD {
+    let files = children.iter().filter(|node| !node.is_dir()).count();
+    let (loose, piles) = if files > CROWD {
         pile(&rest)
     } else {
         (
