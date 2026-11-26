@@ -103,7 +103,7 @@ impl Shell {
         let hub = cx.new(|_| hub);
         let bench = cx.new(|_| bench);
         let repos = cx.new(|_| Repos::new(Arc::new(GitCli)));
-        let home = cx.new(|_| Overview::new(bench.clone(), registry, repos.clone()));
+        let home = cx.new(|cx| Overview::new(bench.clone(), registry, repos.clone(), cx));
         let code =
             cx.new(|cx| Code::new(bench.clone(), hub.clone(), home.clone(), repos.clone(), cx));
         let files = cx.new(|cx| Files::new(bench.clone(), repos.clone(), window, cx));
@@ -227,8 +227,10 @@ impl Shell {
         })
         .detach();
 
+        // The keys start on the home, so Space held moves its graph; the window's own keys still
+        // reach the window around it.
         let focus = cx.focus_handle();
-        focus.focus(window, cx);
+        home.update(cx, |home, cx| home.focus(window, cx));
 
         let mut shell = Self {
             focus,
@@ -405,7 +407,7 @@ impl Shell {
         } else if self.gitting {
             let open = self.git.update(cx, |git, cx| git.toggle_panel(cx));
             if !open && !keep {
-                self.focus.focus(window, cx);
+                self.rest(window, cx);
             }
         } else {
             return false;
@@ -487,7 +489,7 @@ impl Shell {
         self.paletting = false;
         match self.before.take() {
             Some(before) => before.focus(window, cx),
-            None => self.focus.focus(window, cx),
+            None => self.rest(window, cx),
         }
         cx.notify();
     }
@@ -542,10 +544,20 @@ impl Shell {
         cx.notify();
     }
 
+    // The keys go back to the window: to the home when nothing is over it, so Space held moves
+    // its graph.
+    fn rest(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code.read(cx).is_shown() || self.chatting || self.gitting {
+            self.focus.focus(window, cx);
+        } else {
+            self.home.update(cx, |home, cx| home.focus(window, cx));
+        }
+    }
+
     fn close_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.gitting = false;
         self.paletting = false;
-        self.focus.focus(window, cx);
+        self.rest(window, cx);
         cx.notify();
     }
 
@@ -602,7 +614,7 @@ impl Shell {
         self.paletting = false;
         self.dock
             .update(cx, |dock, cx| dock.set_chatting(false, cx));
-        self.focus.focus(window, cx);
+        self.rest(window, cx);
         cx.notify();
     }
 
@@ -788,10 +800,10 @@ impl Shell {
                 self.structure
                     .update(cx, |structure, cx| structure.follow(None, window, cx));
                 self.panel = true;
-                self.focus.focus(window, cx);
+                self.rest(window, cx);
             }
             // The keys go back to the window, not to the editor gone.
-            code::Event::Dismissed => self.focus.focus(window, cx),
+            code::Event::Dismissed => self.rest(window, cx),
         }
     }
 

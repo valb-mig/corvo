@@ -11,8 +11,8 @@ use corvo_ui::{field, notice};
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::Icon;
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, EventEmitter, IntoElement, Render, SharedString,
-    Styled as _, Subscription, WeakEntity, Window,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, IntoElement, Render,
+    SharedString, Styled as _, Subscription, WeakEntity, Window,
 };
 
 use crate::repos::Repos;
@@ -61,6 +61,8 @@ pub struct Overview {
     registry: Registry,
     repos: Entity<Repos>,
     camera: Camera,
+    // Where the keys go while the home is in front, so Space held moves the graph.
+    focus: FocusHandle,
     // The card that can be hidden under each key, as last rendered.
     places: RefCell<HashMap<SharedString, (Place, String)>>,
     // The group whose title is being typed in.
@@ -72,16 +74,27 @@ pub struct Overview {
 impl EventEmitter<Event> for Overview {}
 
 impl Overview {
-    pub fn new(bench: Entity<Workbench>, registry: Registry, repos: Entity<Repos>) -> Self {
+    pub fn new(
+        bench: Entity<Workbench>,
+        registry: Registry,
+        repos: Entity<Repos>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             bench,
             registry,
             repos,
             camera: Camera::default(),
+            focus: cx.focus_handle(),
             places: RefCell::default(),
             naming: None,
             turned: HashMap::new(),
         }
+    }
+
+    // The keys go to the home, the window's own keys still reaching the window around it.
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.focus.focus(window, cx);
     }
 
     pub fn chart(&mut self, projects: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
@@ -480,6 +493,7 @@ impl Render for Overview {
             .collect();
         let (moved, grouped, hidden, tidy) = (view.clone(), view.clone(), view.clone(), view);
         Graph::new("overview", &self.camera, roots)
+            .focus(&self.focus)
             .nudges(nudges)
             .groups(groups)
             .on_move(move |moves, window, cx| {

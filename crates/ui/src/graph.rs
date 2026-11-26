@@ -9,10 +9,10 @@ use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Bounds, Element, ElementId, FontWeight, GlobalElementId, Hsla,
-    InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, MouseButton,
-    ParentElement as _, PathBuilder, Pixels, Point, RenderOnce, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, canvas, div, point,
+    AnyElement, App, Bounds, CursorStyle, Div, Element, ElementId, FocusHandle, FontWeight,
+    GlobalElementId, Hsla, InspectorElementId, InteractiveElement as _, IntoElement, LayoutId,
+    MouseButton, ParentElement as _, PathBuilder, Pixels, Point, RenderOnce, SharedString,
+    Stateful, StatefulInteractiveElement as _, Styled as _, Window, canvas, div, point,
     prelude::FluentBuilder as _, px,
 };
 
@@ -23,8 +23,9 @@ use crate::motion::{Glides, Pan, Sight};
 // little apart, and end in a chip; a card can stand for a pile, with sheets under it, the wheel
 // over it turning through what it holds. A card can drop a panel down from
 // under its header; its column widens to hold it. Cards can be picked, with Ctrl or Shift on a
-// click or a box drawn with Shift, to group or hide them together; a group is a frame around its
-// cards, or one card in their place when collapsed. Nothing jumps: cards glide to where the
+// click or a box drawn on the background, to group or hide them together; a group is a frame
+// around its cards, or one card in their place when collapsed. The wheel moves the graph, and so
+// does a drag with Space held, anywhere on it. Nothing jumps: cards glide to where the
 // layout puts them, new ones coming out of the card holding them, and the zoom bar glides the
 // camera; the wheel and the mouse move it at once.
 
@@ -503,6 +504,8 @@ struct Lens {
     pan: Option<Pan>,
     // Motion is turned down: nothing glides.
     still: bool,
+    // Space is held: a drag anywhere moves the view.
+    hand: bool,
 }
 
 #[derive(Clone)]
@@ -534,6 +537,7 @@ impl Default for Lens {
             glides: Glides::default(),
             pan: None,
             still: false,
+            hand: false,
         }
     }
 }
@@ -666,6 +670,18 @@ impl Camera {
         self.lens.borrow().spent
     }
 
+    fn hand(&self) -> bool {
+        self.lens.borrow().hand
+    }
+
+    // Space went down or up; true when that changes what a drag does.
+    fn hold(&self, hand: bool) -> bool {
+        let mut lens = self.lens.borrow_mut();
+        let changed = lens.hand != hand;
+        lens.hand = hand;
+        changed
+    }
+
     // The wheel went `by` over a card: how many turns that makes with what it went before over
     // the same card, down being forward.
     fn turns(&self, id: &SharedString, by: f32) -> i32 {
@@ -749,7 +765,8 @@ impl Camera {
         lens.drag = Some(Drag::Cards(at, from, (0., 0.)));
     }
 
-    // A press anywhere else moves the view, or with `pick` draws a box to pick cards with.
+    // A press on the background draws a box to pick cards with, or with Space held, a press
+    // anywhere moves the view.
     fn press(&self, at: Point<Pixels>, pick: bool) {
         let p = self.under(at);
         let mut lens = self.lens.borrow_mut();
@@ -1018,6 +1035,7 @@ struct Edge {
 pub struct Graph {
     id: ElementId,
     camera: Camera,
+    focus: Option<FocusHandle>,
     roots: Vec<Branch>,
     nudges: HashMap<SharedString, (f32, f32)>,
     groups: Vec<Group>,
@@ -1036,6 +1054,7 @@ impl Graph {
         Self {
             id: id.into(),
             camera: camera.clone(),
+            focus: None,
             roots: roots.into_iter().collect(),
             nudges: HashMap::new(),
             groups: Vec::new(),
@@ -1044,6 +1063,13 @@ impl Graph {
             on_hide: None,
             on_reorganize: None,
         }
+    }
+
+    // Where the keys go while the graph is in front, so Space held turns a drag into moving the
+    // view. A press on the graph takes them, unless something inside it has them.
+    pub fn focus(mut self, focus: &FocusHandle) -> Self {
+        self.focus = Some(focus.clone());
+        self
     }
 
     // How far each card was moved by hand, by its id; what it holds moves with it.
@@ -1096,6 +1122,14 @@ impl RenderOnce for Graph {
         let now = Instant::now();
         let camera = self.camera;
         let panning = camera.step(now, cx.reduce_motion());
+        // Space let go while the keys were elsewhere never comes up here.
+        let keyed = self
+            .focus
+            .as_ref()
+            .is_some_and(|focus| focus.is_focused(window));
+        if !keyed || !window.is_window_active() {
+            camera.hold(false);
+        }
         let theme = cx.theme();
         let shapes: Vec<Shape> = self.roots.iter().map(shape).collect();
         let layout = layout(&shapes);
@@ -1370,15 +1404,36 @@ impl RenderOnce for Graph {
             camera.clone(),
         );
         let (on_move, on_drop) = (self.on_move.clone(), self.on_move);
+        // With Space held, a sheet over the cards takes the press, so a drag anywhere moves the
+        // view, the hand closing while it does.
+        let hand = camera.hand().then(|| {
+            let grip = camera.clone();
+            let cursor = match drag {
+                Some(Drag::View(..)) => CursorStyle::ClosedHand,
+                _ => CursorStyle::OpenHand,
+            };
+            div()
+                .id("hand")
+                .absolute()
+                .size_full()
+                .cursor(cursor)
+                .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                    cx.stop_propagation();
+                    grip.press(event.position, false);
+                    window.refresh();
+                })
+        });
         div()
             .id(self.id)
             .relative()
             .size_full()
             .overflow_hidden()
             .bg(theme.background)
+            .when_some(self.focus, |el, focus| keys(el, focus, &camera))
             .on_scroll(wheel)
             .on_mouse_down(MouseButton::Left, move |event, window, _| {
-                down.press(event.position, event.modifiers.shift);
+                let pick = !down.hand();
+                down.press(event.position, pick);
                 window.refresh();
             })
             .on_mouse_move(move |event, window, cx| {
@@ -1420,8 +1475,40 @@ impl RenderOnce for Graph {
                 scale: zoom,
                 child: content.into_any_element(),
             })
+            .children(hand)
             .child(zoom_bar(&camera, untangle, cx))
     }
+}
+
+// The graph takes the keys on a press, unless something inside it has them, and Space held makes
+// a drag move the view.
+fn keys(el: Stateful<Div>, focus: FocusHandle, camera: &Camera) -> Stateful<Div> {
+    let space = |key: &str| key == "space";
+    let (down, up) = (camera.clone(), camera.clone());
+    let (take, own) = (focus.clone(), focus.clone());
+    el.track_focus(&focus)
+        .capture_any_mouse_down(move |_, window, cx| {
+            if !take.contains_focused(window, cx) {
+                take.focus(window, cx);
+            }
+        })
+        // A Space typed in a field inside the graph, a group's title, stays a space.
+        .on_key_down(move |event, window, cx| {
+            let held = event.keystroke.modifiers;
+            let plain = !(held.control || held.platform || held.alt);
+            if !own.is_focused(window) || !space(&event.keystroke.key) || !plain {
+                return;
+            }
+            cx.stop_propagation();
+            if down.hold(true) {
+                window.refresh();
+            }
+        })
+        .on_key_up(move |event, window, _| {
+            if space(&event.keystroke.key) && up.hold(false) {
+                window.refresh();
+            }
+        })
 }
 
 fn zoom_bar(camera: &Camera, untangle: Option<Handler>, cx: &App) -> impl IntoElement {
