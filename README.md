@@ -113,6 +113,7 @@ Chats are saved one file each to `$XDG_CONFIG_HOME/corvo/chats/<workspace>/<chat
 | ---------------- | ------------------------------------------------------ |
 | `crates/domain`  | Domain objects and ports, no UI or framework code      |
 | `crates/fs`      | Local file system adapter for the `Fs` port            |
+| `crates/git`     | Git adapter for the `Git` port, over the `git` command |
 | `crates/lsp`     | Language server client: processes, JSON-RPC, protocol  |
 | `crates/agent`   | Agent client over ACP: processes, JSON-RPC, sessions   |
 | `crates/syntax`  | Code outline from tree-sitter for the `Syntax` port    |
