@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use corvo_domain::{Doc, Workbench, ago};
+use corvo_domain::{Doc, Script, Workbench, ago};
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::{App, Entity, SharedString, Window};
 
@@ -9,6 +9,7 @@ use crate::agents::{Agents, now};
 use crate::pane::chats::ChatWindow;
 use crate::pane::code::Code;
 use crate::pane::git::GitWindow;
+use crate::pane::terminals::Terminals;
 use crate::repos::Repos;
 
 // How many files of a project the code's palette lists at most, of those that match.
@@ -160,6 +161,56 @@ pub fn git(git: &Entity<GitWindow>, repos: &Entity<Repos>, query: &str, cx: &App
             });
             offers.push(offer.detail(detail));
         }
+    }
+    offers
+}
+
+// The terminal window's: a new terminal, the terminals by name, then the scripts of the project
+// in front, each run in a terminal of its own.
+pub fn terminals(
+    terminals: &Entity<Terminals>,
+    scripts: &[Script],
+    root: Option<&Path>,
+    query: &str,
+    cx: &App,
+) -> Vec<Offer> {
+    let mut offers = Vec::new();
+    if finds(query, "New terminal") {
+        let fresh = terminals.clone();
+        offers.push(Offer::new(
+            Glyph::Plus,
+            "New terminal",
+            move |window, cx| {
+                fresh.update(cx, |terminals, cx| terminals.new_terminal(window, cx));
+            },
+        ));
+    }
+    for (id, name, detail) in terminals.read(cx).list() {
+        if !finds(query, &format!("{name} {detail}")) {
+            continue;
+        }
+        let pick = terminals.clone();
+        let offer = Offer::new(Glyph::Terminal, name, move |window, cx| {
+            pick.update(cx, |terminals, cx| terminals.show(id, window, cx));
+        });
+        offers.push(offer.detail(detail));
+    }
+    let Some(root) = root else {
+        return offers;
+    };
+    for script in scripts {
+        let label = format!("Run {}", script.name());
+        if !finds(query, &format!("{label} {}", script.command())) {
+            continue;
+        }
+        let (run, script, root) = (terminals.clone(), script.clone(), root.to_path_buf());
+        let detail = format!("{} · {}", script.source(), script.command().trim_end());
+        let offer = Offer::new(Glyph::Play, label, move |window, cx| {
+            run.update(cx, |terminals, cx| {
+                terminals.run(&script, &root, window, cx)
+            });
+        });
+        offers.push(offer.detail(detail));
     }
     offers
 }

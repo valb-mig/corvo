@@ -1103,6 +1103,7 @@ dependencies = [
  "corvo-git",
  "corvo-lsp",
  "corvo-syntax",
+ "corvo-terminal",
  "corvo-ui",
  "futures",
  "gpui-kit",

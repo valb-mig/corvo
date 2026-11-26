@@ -11,6 +11,7 @@ actions!(
         ShowCode,
         ShowGit,
         ShowChat,
+        ShowTerminal,
         OpenPalette,
         Dismiss,
         TogglePanel
@@ -43,6 +44,7 @@ fn action(command: Command) -> Box<dyn Action> {
         Command::ShowCode => Box::new(ShowCode),
         Command::ShowGit => Box::new(ShowGit),
         Command::ShowChat => Box::new(ShowChat),
+        Command::ShowTerminal => Box::new(ShowTerminal),
         Command::OpenPalette => Box::new(OpenPalette),
         Command::Dismiss => Box::new(Dismiss),
         Command::TogglePanel => Box::new(TogglePanel),

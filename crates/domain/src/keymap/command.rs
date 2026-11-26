@@ -11,11 +11,13 @@ pub enum Command {
     ShowGit,
     // Brings the chat window over the home, or puts it away.
     ShowChat,
+    // Brings the terminal window over the home, or puts it away.
+    ShowTerminal,
     // Opens the palette of the window in front, or closes it.
     OpenPalette,
     // Puts the code away, back to the home.
     Dismiss,
     // Opens the panel on the right of the window in front, or closes it: the file tree of the
-    // code, the list of chats, the changed files of the git window.
+    // code, the list of chats, the changed files of the git window, the terminals.
     TogglePanel,
 }

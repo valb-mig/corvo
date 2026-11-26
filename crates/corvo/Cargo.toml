@@ -10,6 +10,7 @@ corvo-fs.workspace = true
 corvo-git.workspace = true
 corvo-lsp.workspace = true
 corvo-syntax.workspace = true
+corvo-terminal.workspace = true
 corvo-ui.workspace = true
 gpui-kit.workspace = true
 anyhow.workspace = true

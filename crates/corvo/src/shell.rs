@@ -5,12 +5,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use corvo_domain::server::Registry;
-use corvo_domain::{Chats, Share, Status, Uuid, Workbench, Workspaces, agents, languages};
+use corvo_domain::{
+    Chats, Script, Share, Status, Uuid, Workbench, Workspaces, agents, languages, scripts,
+};
 use corvo_fs::{JsonChats, JsonOptions, LocalFs};
 use corvo_git::GitCli;
 use corvo_lsp::{Hub, Note};
 use corvo_ui::drawer::Drawer;
-use corvo_ui::keys::{Dismiss, OpenPalette, Save, ShowChat, ShowCode, ShowGit, TogglePanel};
+use corvo_ui::keys::{
+    Dismiss, OpenPalette, Save, ShowChat, ShowCode, ShowGit, ShowTerminal, TogglePanel,
+};
 use corvo_ui::language_icon::LanguageIcon;
 use corvo_ui::notice;
 use corvo_ui::statusbar::{Action, Popup, StatusBar};
@@ -35,8 +39,10 @@ use crate::pane::files::{self, Files};
 use crate::pane::git::{self, GitWindow};
 use crate::pane::hidden::Hidden;
 use crate::pane::overview::{self, Overview};
+use crate::pane::scripts::{self, Scripts};
 use crate::pane::stack::Stack;
 use crate::pane::structure::{self, Structure};
+use crate::pane::terminals::Terminals;
 use crate::repos::{self, Repos};
 
 // How often git is read again while the window is in front, for what the agent or a terminal
@@ -73,6 +79,12 @@ pub struct Shell {
     repos: Entity<Repos>,
     git: Entity<GitWindow>,
     gitting: bool,
+    // The terminals of the workspace, in a window that takes turns with the others over the home,
+    // and the scripts of the project in front, which the status bar runs in them.
+    terminals: Entity<Terminals>,
+    terming: bool,
+    scripts: Entity<Scripts>,
+    scripting: bool,
     // The palette of the window in front, what had the keys before it opened, and the files of
     // each project for the code's palette, walked the first time it is asked.
     palette: Entity<CommandState>,
@@ -127,7 +139,9 @@ impl Shell {
         let start = project(cx);
         agents.read(cx).warm(&start);
         let dock = cx.new(|cx| Dock::new(agents.clone(), project.clone(), window, cx));
-        let chats = cx.new(|cx| ChatWindow::new(agents.clone(), project, name.into(), cx));
+        let chats = cx.new(|cx| ChatWindow::new(agents.clone(), project.clone(), name.into(), cx));
+        let terminals = cx.new(|cx| Terminals::new(project, cx));
+        let scripts = cx.new(|_| Scripts::default());
         let palette = cx.new(|cx| CommandState::new(window, cx));
         if let Some(trouble) = trouble {
             notice::error(trouble, window, cx);
@@ -164,6 +178,9 @@ impl Shell {
             cx.subscribe_in(&home, window, Self::on_home),
             cx.subscribe_in(&git, window, Self::on_git),
             cx.subscribe_in(&chats, window, Self::on_chats),
+            cx.subscribe_in(&scripts, window, Self::on_scripts),
+            // The terminal window's bar counts its terminals, and so does the status bar.
+            cx.observe(&terminals, |_, _, cx| cx.notify()),
             // The chat window's bar counts its chats.
             cx.observe(&chats, |_, _, cx| cx.notify()),
             cx.subscribe(&repos, Self::on_moved),
@@ -190,6 +207,7 @@ impl Shell {
                             .update(cx, |dock, cx| dock.set_chatting(false, cx));
                     }
                     this.gitting = false;
+                    this.terming = false;
                 }
                 cx.notify();
             }),
@@ -254,6 +272,10 @@ impl Shell {
             repos,
             git,
             gitting: false,
+            terminals,
+            terming: false,
+            scripts,
+            scripting: false,
             palette,
             paletting: false,
             before: None,
@@ -271,6 +293,11 @@ impl Shell {
 
     pub fn bench(&self) -> &Entity<Workbench> {
         &self.bench
+    }
+
+    // What runs in front of a shell, by terminal: the name of the terminal and of the program.
+    pub fn running(&self, cx: &App) -> Vec<(String, String)> {
+        self.terminals.read(cx).running()
     }
 
     fn linked(&self, cx: &Context<Self>) -> Vec<PathBuf> {
@@ -291,6 +318,32 @@ impl Shell {
         self.rescope(cx);
         self.files.update(cx, |files, cx| files.refresh(cx));
         self.chart(window, cx);
+        self.read_scripts(cx);
+    }
+
+    // Reads the scripts of the project in front off the main thread, showing those read before
+    // meanwhile.
+    fn read_scripts(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.bench.read(cx).project().map(Path::to_path_buf) else {
+            self.scripts.update(cx, |scripts, cx| scripts.clear(cx));
+            return;
+        };
+        let task = cx.background_executor().spawn({
+            let root = root.clone();
+            async move { scripts(&LocalFs, &root) }
+        });
+        cx.spawn(async move |this, cx| {
+            let found = task.await;
+            this.update(cx, |this, cx| {
+                // The project in front may have changed while they were read.
+                if this.bench.read(cx).project() == Some(root.as_path()) {
+                    this.scripts
+                        .update(cx, |scripts, cx| scripts.set(root, found, cx));
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // Counts the languages of the project open in the home off the main thread, showing what was
@@ -409,6 +462,14 @@ impl Shell {
             if !open && !keep {
                 self.rest(window, cx);
             }
+        } else if self.terming {
+            let open = self
+                .terminals
+                .update(cx, |terminals, cx| terminals.toggle_panel(cx));
+            if !open && !keep {
+                self.terminals
+                    .update(cx, |terminals, cx| terminals.focus(window, cx));
+            }
         } else {
             return false;
         }
@@ -437,6 +498,8 @@ impl Shell {
             self.close_chat(window, cx);
         } else if self.gitting {
             self.close_git(window, cx);
+        } else if self.terming {
+            self.close_terminal(window, cx);
         } else {
             cx.propagate();
         }
@@ -447,6 +510,7 @@ impl Shell {
         let repos::Event(moved) = event;
         self.home.update(cx, |home, cx| home.uncover(moved, cx));
         self.files.update(cx, |files, cx| files.refresh(cx));
+        self.read_scripts(cx);
         // The files listed for the palette are walked again when next asked.
         self.index.clear();
         if self.paletting {
@@ -468,7 +532,7 @@ impl Shell {
 
     // Opens the palette of the window in front, with nothing typed; with only the home, none.
     fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !(self.code.read(cx).is_shown() || self.chatting || self.gitting) {
+        if !(self.code.read(cx).is_shown() || self.chatting || self.gitting || self.terming) {
             return;
         }
         self.before = window.focused(cx);
@@ -528,6 +592,70 @@ impl Shell {
         self.toggle_chat(window, cx);
     }
 
+    fn on_show_terminal(&mut self, _: &ShowTerminal, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_terminal(window, cx);
+    }
+
+    // The terminal window comes over the home in the code's place, or goes.
+    fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.terming {
+            self.close_terminal(window, cx);
+        } else {
+            self.show_terminal(window, cx);
+        }
+    }
+
+    // Brings the terminal window over the home, with a terminal in the project in front when
+    // there is none, the keys in it.
+    fn show_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.terming {
+            self.dismiss(window, cx);
+            if self.chatting {
+                self.close_chat(window, cx);
+            }
+            self.gitting = false;
+            self.terming = true;
+        }
+        self.terminals.update(cx, |terminals, cx| {
+            terminals.ensure(window, cx);
+            terminals.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn close_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.terming = false;
+        self.paletting = false;
+        self.rest(window, cx);
+        cx.notify();
+    }
+
+    // A script picked in the status bar runs in a terminal of its own, the terminal window
+    // coming over the home to show it.
+    fn on_scripts(
+        &mut self,
+        _: &Entity<Scripts>,
+        event: &scripts::Event,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            scripts::Event::Run(script) => {
+                self.scripting = false;
+                self.run_script(script, window, cx);
+            }
+        }
+    }
+
+    fn run_script(&mut self, script: &Script, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(root) = self.scripts.read(cx).root().map(Path::to_path_buf) else {
+            return;
+        };
+        self.terminals
+            .update(cx, |terminals, cx| terminals.run(script, &root, window, cx));
+        self.show_terminal(window, cx);
+    }
+
     // The git window comes over the home in the code's place, or goes.
     fn toggle_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.gitting {
@@ -538,16 +666,20 @@ impl Shell {
         if self.chatting {
             self.close_chat(window, cx);
         }
+        self.terming = false;
         self.gitting = true;
         self.repos.update(cx, |repos, cx| repos.refresh(cx));
         self.git.update(cx, |git, cx| git.reread(cx));
         cx.notify();
     }
 
-    // The keys go back to the window: to the home when nothing is over it, so Space held moves
-    // its graph.
+    // The keys go back to the window: into the terminal in the terminal window, to the home when
+    // nothing is over it, so Space held moves its graph.
     fn rest(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.code.read(cx).is_shown() || self.chatting || self.gitting {
+        if self.terming {
+            self.terminals
+                .update(cx, |terminals, cx| terminals.focus(window, cx));
+        } else if self.code.read(cx).is_shown() || self.chatting || self.gitting {
             self.focus.focus(window, cx);
         } else {
             self.home.update(cx, |home, cx| home.focus(window, cx));
@@ -600,6 +732,7 @@ impl Shell {
         }
         self.dismiss(window, cx);
         self.gitting = false;
+        self.terming = false;
         self.chatting = true;
         self.dock.update(cx, |dock, cx| {
             dock.set_chatting(true, cx);
@@ -918,6 +1051,31 @@ impl Shell {
         self.window("git", bar, body, ask, Self::close_git, cx)
     }
 
+    fn terminal_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let terminals = self.terminals.read(cx);
+        let bar = WindowBar::new(Glyph::Terminal, "Terminal")
+            .subtitle(terminals.subtitle())
+            .panel(
+                terminals.has_panel(),
+                "Terminals (Ctrl+B)",
+                self.panel_button(cx),
+            );
+        let body = self.terminals.clone().into_any_element();
+        let offers = self.paletting.then(|| {
+            let query = self.palette.read(cx).query(cx).to_string();
+            let scripts = self.scripts.read(cx);
+            palette::terminals(
+                &self.terminals,
+                scripts.scripts(),
+                scripts.root(),
+                &query,
+                cx,
+            )
+        });
+        let ask = ("Find a terminal or run a script", offers);
+        self.window("terminal", bar, body, ask, Self::close_terminal, cx)
+    }
+
     // A window over the home, which steps back behind a dimmed layer: its bar along the top, with
     // the field of its palette in the middle, and what it holds under it; the palette, while open,
     // under the bar with what it offers. Esc, the bar's × or a click on the dimmed home puts the
@@ -1084,6 +1242,31 @@ impl Shell {
         )
     }
 
+    // The scripts of the project in front, when it has some; a click lists them, and a pick runs
+    // one in a terminal. Opened, they are read again, for what changed meanwhile.
+    fn scripts_item(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        if self.scripts.read(cx).scripts().is_empty() {
+            return None;
+        }
+        let shell = cx.entity().downgrade();
+        Some(
+            Popup::new("scripts", "Scripts", self.scripts.clone())
+                .glyph(Glyph::Play)
+                .open(self.scripting)
+                .on_toggle(move |open, _, cx| {
+                    shell
+                        .update(cx, |shell, cx| {
+                            shell.scripting = open;
+                            if open {
+                                shell.read_scripts(cx);
+                            }
+                            cx.notify();
+                        })
+                        .ok();
+                }),
+        )
+    }
+
     // The logos of the main languages of the shown project; a click lists them all, named.
     fn stack_item(&self, shares: &[Share], cx: &mut Context<Self>) -> impl IntoElement + use<> {
         const SHOWN: usize = 3;
@@ -1118,6 +1301,8 @@ impl Render for Shell {
             Some(self.chat_overlay(cx).into_any_element())
         } else if self.gitting {
             Some(self.git_overlay(cx).into_any_element())
+        } else if self.terming {
+            Some(self.terminal_overlay(cx).into_any_element())
         } else {
             None
         };
@@ -1135,6 +1320,12 @@ impl Render for Shell {
         let shell = cx.entity().downgrade();
         let coder = cx.entity().downgrade();
         let linker = cx.entity().downgrade();
+        let termer = cx.entity().downgrade();
+        let terminal_tip = if self.terming {
+            "Put the terminal away (Ctrl+Shift+J)"
+        } else {
+            "Terminal (Ctrl+Shift+J)"
+        };
         let mut status = StatusBar::new()
             .item(
                 Action::new("code", Glyph::Code, tip).on_click(move |window, cx| {
@@ -1142,6 +1333,15 @@ impl Render for Shell {
                         .update(cx, |shell, cx| shell.toggle_code(window, cx))
                         .ok();
                 }),
+            )
+            .item(
+                Action::new("terminal", Glyph::Terminal, terminal_tip).on_click(
+                    move |window, cx| {
+                        termer
+                            .update(cx, |shell, cx| shell.toggle_terminal(window, cx))
+                            .ok();
+                    },
+                ),
             )
             .item(
                 Action::new("link", Glyph::FolderPlus, "Link folder…").on_click(
@@ -1166,6 +1366,9 @@ impl Render for Shell {
         if let Some(item) = self.git_item(cx) {
             status = status.item(item);
         }
+        if let Some(item) = self.scripts_item(cx) {
+            status = status.item(item);
+        }
         if let Some(shares) = self
             .bench
             .read(cx)
@@ -1185,6 +1388,7 @@ impl Render for Shell {
             .on_action(cx.listener(Self::on_show_code))
             .on_action(cx.listener(Self::on_show_git))
             .on_action(cx.listener(Self::on_show_chat))
+            .on_action(cx.listener(Self::on_show_terminal))
             .on_action(cx.listener(Self::on_open_palette))
             .on_action(cx.listener(Self::on_toggle_panel))
             .on_action(cx.listener(Self::on_dismiss))

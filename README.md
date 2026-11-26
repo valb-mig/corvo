@@ -14,7 +14,7 @@ corvo opens on the list of workspaces, where you add, remove or enter one. A wor
 
 Inside a workspace the window holds its home. The code comes over it, with the home dimmed behind: the open files in tabs, and a panel floating on their right, over the editor rather than beside it, with the file tree of a project (the one open in the home, or the one the active tab belongs to) over the structure of the active file (see Outline). `ctrl-b` or the panel button of the window's bar opens and closes it. A click on a file's card in the home opens it there, and so does a file picked in the tree; **×**, `Escape` or a click on the dimmed home puts the code away, its tabs kept for the next time. Closing the last tab leaves the code open, empty, with the tree open to pick a file. The code, like the chat and git windows, has a bar along its top with its name, the button of its panel, `Esc` and a **×**, and in its middle the field of the window's palette: click it or press `ctrl-k`, type, and pick with the arrows and `Enter` or a click (`Esc` or a click elsewhere closes it). The code's palette opens a file: the open ones first, then those of the project in front, by their path in it, leaving out what git ignores. Projects are linked and unlinked from the home: the **Link folder…** button of the status bar links one, and right clicking a project card gives **Unlink**. Open tabs belong to the workspace, so switching projects only changes the tree.
 
-A status bar runs along the bottom of the window. On the left, the code button brings the code over the home with the tabs left open, or with none and the tree open to pick a file; with the code shown, it puts it away. Next to it, a button links a folder to the workspace, then the count of cards hidden from the home (see Home), then the branch of the project in front and how many files changed in its repository, which opens the git window (see Git). On the right it shows the languages of the project open in the home, the logos of the three with the most files, in their brand colors (from [Simple Icons](https://simpleicons.org), CC0, in `crates/ui/assets/languages`; a color too dark for the dark theme is lifted); click it for all of them, each with its files and share. They are counted in the background when a project is opened in the home, from the extensions of its files, leaving out `node_modules`, `target`, `vendor`, `dist` and `build`; data, docs and settings (JSON, YAML, TOML, Markdown) are not counted as languages.
+A status bar runs along the bottom of the window. On the left, the code button brings the code over the home with the tabs left open, or with none and the tree open to pick a file; with the code shown, it puts it away. Next to it, the terminal button opens or closes the terminal window (see Terminal), a button links a folder to the workspace, then the count of cards hidden from the home (see Home), then the branch of the project in front and how many files changed in its repository, which opens the git window (see Git), and **Scripts**, when the project in front has some, which lists them to run one in a terminal. On the right it shows the languages of the project open in the home, the logos of the three with the most files, in their brand colors (from [Simple Icons](https://simpleicons.org), CC0, in `crates/ui/assets/languages`; a color too dark for the dark theme is lifted); click it for all of them, each with its files and share. They are counted in the background when a project is opened in the home, from the extensions of its files, leaving out `node_modules`, `target`, `vendor`, `dist` and `build`; data, docs and settings (JSON, YAML, TOML, Markdown) are not counted as languages.
 
 corvo draws its own title bar: a back button to the workspace list, the workspace name, and the window controls the compositor supports (Hyprland has no minimize, so it only shows maximize and close). Leaving a workspace or closing the window is refused while a tab has unsaved changes.
 
@@ -66,6 +66,7 @@ The outline comes from tree-sitter (`crates/syntax`), with no language server ne
 | `ctrl-shift-e` | Open the code                             | global |
 | `ctrl-shift-g` | Open or close the git window              | global |
 | `ctrl-shift-c` | Open or close the chat window             | global |
+| `ctrl-shift-j` | Open or close the terminal window         | global |
 | `ctrl-k`       | Open or close the window's palette        | global |
 | `escape`       | Close the palette, or put the window away | global |
 | `ctrl-b`       | Open or close the window's panel          | global |
@@ -106,6 +107,25 @@ The list lives in `corvo_domain::server::Registry`. Server stderr goes to `~/.ca
 
 Known limit: servers that only speak UTF-16 positions can misplace columns on lines that contain characters outside the Basic Multilingual Plane, such as emoji.
 
+## Terminal
+
+The terminal window (`ctrl-shift-j`, or the terminal button of the status bar) takes turns with the code, the chats and git over the home. It holds the screen of the terminal picked; its panel, floating on the right (`ctrl-b` or the bar's button), lists the terminals of the workspace, each with its name and what runs in it (`Running cargo`, a green dot beside it) or the folder it is in, and a **+** for a new one. Opened with none, a terminal starts in the project in front. A click on a terminal shows it; right click it, or hover for its **×**, to **Rename** or **Close** it, which hangs up on its shell. A terminal goes when its shell ends (`exit`, `ctrl-d`). The window's palette finds a terminal by its name, starts a new one, or runs a script.
+
+Each terminal runs the dev's shell (`$SHELL`) on a pseudoterminal, read by the emulator of [Alacritty](https://github.com/alacritty/alacritty) (`alacritty_terminal`, Apache-2.0), so colors, full screen programs (vim, less, htop) and the shell's own line editing work as in any terminal. The keys go to the program, but the window's own (`Esc`, `ctrl-k`, `ctrl-b`, `ctrl-s`, `ctrl-shift-…`) keep their place: `Esc` puts the window away. `Tab` and `ctrl-c` go to the program too. A drag picks text, a double click a word, a triple click lines, and what is picked is copied as the mouse lets go; `ctrl-shift-v` or `shift-insert` pastes. The wheel goes back through what scrolled off the top, ten thousand lines, and typing brings the screen back down; in a full screen program it sends the arrows.
+
+**Scripts** in the status bar lists the scripts at the root of the project in front, under the file each comes from, and a click runs one in a terminal of its own, named after it, the terminal window coming over the home to show it. The command is typed in the shell once it is ready, so the terminal stays after the script ends, with the script in its history. The scripts come from:
+
+| File                                  | Each                                  | Runs with                                                                               |
+| ------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------- |
+| `justfile`, `Justfile`, `.justfile`   | recipe, but private ones              | `just <recipe>`                                                                         |
+| `package.json`                        | script, but `pre`/`post` hooks        | `pnpm`, `yarn`, `bun` or `npm run <script>`, by the lock file, then by `packageManager` |
+| `composer.json`                       | script, but composer events           | `composer run <script>`                                                                 |
+| `Makefile`, `makefile`, `GNUmakefile` | target, but special ones and patterns | `make <target>`                                                                         |
+
+Beside each, what it does: the comment above a recipe, a `## comment` after a target, composer's `scripts-descriptions`, or else what it runs. A recipe that needs arguments is typed without running, for the dev to finish. The list is read when the project in front changes, when files change on disk, and each time it opens.
+
+Leaving the workspace or closing the window while a terminal runs something other than its shell asks first, naming what runs where; leaving stops it.
+
 ## Agents
 
 The agent bar sits at the foot of the window, centred, over the home and over the code and chat windows alike. It holds the agent button, the field, the attach button and the chat button; `Enter` sends what is written to the picked chat, or to a new one. While the agent works, a stop button joins them.
@@ -129,16 +149,17 @@ Chats are saved one file each to `$XDG_CONFIG_HOME/corvo/chats/<workspace>/<chat
 
 ## Crates
 
-| Crate            | Role                                                   |
-| ---------------- | ------------------------------------------------------ |
-| `crates/domain`  | Domain objects and ports, no UI or framework code      |
-| `crates/fs`      | Local file system adapter for the `Fs` port            |
-| `crates/git`     | Git adapter for the `Git` port, over the `git` command |
-| `crates/lsp`     | Language server client: processes, JSON-RPC, protocol  |
-| `crates/agent`   | Agent client over ACP: processes, JSON-RPC, sessions   |
-| `crates/syntax`  | Code outline from tree-sitter for the `Syntax` port    |
-| `crates/ui`      | Design system over GPUI Kit                            |
-| `crates/corvo`   | The application: composition and panes                 |
+| Crate             | Role                                                   |
+| ----------------- | ------------------------------------------------------ |
+| `crates/domain`   | Domain objects and ports, no UI or framework code      |
+| `crates/fs`       | Local file system adapter for the `Fs` port            |
+| `crates/git`      | Git adapter for the `Git` port, over the `git` command |
+| `crates/lsp`      | Language server client: processes, JSON-RPC, protocol  |
+| `crates/agent`    | Agent client over ACP: processes, JSON-RPC, sessions   |
+| `crates/syntax`   | Code outline from tree-sitter for the `Syntax` port    |
+| `crates/terminal` | Terminal: shell on a pseudoterminal, emulator, keys    |
+| `crates/ui`       | Design system over GPUI Kit                            |
+| `crates/corvo`    | The application: composition and panes                 |
 
 ## Requirements
 

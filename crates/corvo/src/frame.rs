@@ -4,10 +4,11 @@ use corvo_syntax::TreeSitter;
 use corvo_ui::button::Button;
 use corvo_ui::notice;
 use corvo_ui::titlebar::TitleBar;
-use gpui_kit::component::{IconName, v_flex};
+use gpui_kit::component::button::ButtonVariant;
+use gpui_kit::component::{IconName, WindowExt as _, v_flex};
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
-    Styled as _, Subscription, Window, div,
+    SharedString, Styled as _, Subscription, Window, div,
 };
 
 use crate::home::{self, Home};
@@ -58,9 +59,10 @@ impl Frame {
     }
 
     fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.leave(window, cx) {
-            return;
-        }
+        self.leave(Self::home, window, cx);
+    }
+
+    fn home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let home = cx.new(|cx| Home::new(self.spaces.clone(), window, cx));
         self._subs = vec![cx.subscribe_in(&home, window, Self::on_home)];
         self.stage = Stage::Home(home);
@@ -68,14 +70,20 @@ impl Frame {
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.leave(window, cx) {
-            cx.quit();
-        }
+        self.leave(|_, _, cx| cx.quit(), window, cx);
     }
 
-    fn leave(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    // Leaves the workspace, then does what comes next: refused while a tab has unsaved changes,
+    // asked first while a terminal runs something, which leaving stops.
+    fn leave(
+        &mut self,
+        then: fn(&mut Self, &mut Window, &mut Context<Self>),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Stage::Shell { shell, .. } = &self.stage else {
-            return true;
+            then(self, window, cx);
+            return;
         };
         let dirty = shell
             .read(cx)
@@ -87,11 +95,35 @@ impl Frame {
             .filter(|doc| doc.is_dirty())
             .map(Doc::name)
             .collect::<Vec<_>>();
-        if dirty.is_empty() {
-            return true;
+        if !dirty.is_empty() {
+            notice::warn(format!("Unsaved changes: {}", dirty.join(", ")), window, cx);
+            return;
         }
-        notice::warn(format!("Unsaved changes: {}", dirty.join(", ")), window, cx);
-        false
+        let running = shell.read(cx).running(cx);
+        if running.is_empty() {
+            then(self, window, cx);
+            return;
+        }
+        let what: SharedString = running
+            .iter()
+            .map(|(terminal, program)| format!("{program} runs in {terminal}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+            .into();
+        let view = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let view = view.clone();
+            alert
+                .title("Stop what runs in the terminals?")
+                .description(format!("{what}. Leaving the workspace stops it."))
+                .confirm()
+                .ok_text("Stop and leave")
+                .ok_variant(ButtonVariant::Danger)
+                .on_ok(move |_, window, cx| {
+                    view.update(cx, |frame, cx| then(frame, window, cx)).ok();
+                    true
+                })
+        });
     }
 
     fn heading(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {

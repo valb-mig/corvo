@@ -28,6 +28,7 @@ fn main() -> anyhow::Result<()> {
             gpui_kit::init(cx);
             corvo_ui::theme::apply(cx);
             corvo_ui::keys::bind(&Keymap::default(), cx);
+            pane::terminals::init(cx);
 
             let options = WindowOptions {
                 app_id: Some("corvo".into()),
