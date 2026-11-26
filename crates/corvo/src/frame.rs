@@ -1,4 +1,4 @@
-use corvo_domain::{Doc, Workbench, Workspaces};
+use corvo_domain::{Doc, Uuid, Workbench, Workspaces};
 use corvo_fs::LocalFs;
 use corvo_syntax::TreeSitter;
 use corvo_ui::button::Button;
@@ -15,7 +15,7 @@ use crate::shell::Shell;
 
 enum Stage {
     Home(Entity<Home>),
-    Shell { id: u64, shell: Entity<Shell> },
+    Shell { id: Uuid, shell: Entity<Shell> },
 }
 
 pub struct Frame {
@@ -48,7 +48,7 @@ impl Frame {
         }
     }
 
-    fn enter(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    fn enter(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         let spaces = self.spaces.clone();
         let bench = Workbench::new(Box::new(LocalFs), Box::new(TreeSitter));
         let shell = cx.new(|cx| Shell::new(spaces, id, bench, window, cx));

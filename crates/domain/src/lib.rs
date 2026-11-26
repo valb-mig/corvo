@@ -36,5 +36,6 @@ pub use node::{Kind, Node};
 pub use symbol::{Kind as SymbolKind, Symbol};
 pub use tabs::Tabs;
 pub use tree::Tree;
+pub use uuid::Uuid;
 pub use workbench::Workbench;
 pub use workspace::{Workspace, Workspaces, owner};

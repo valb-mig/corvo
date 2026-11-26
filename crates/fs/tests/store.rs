@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use corvo_domain::port::Store;
-use corvo_domain::{Arrangement, Group, Mark, Node, Workspace};
+use corvo_domain::{Arrangement, Group, Mark, Node, Uuid, Workspace};
 use corvo_fs::JsonStore;
 
 fn scratch(name: &str) -> PathBuf {
@@ -23,7 +23,11 @@ fn missing_file_loads_empty() {
 fn saves_and_loads_back() {
     let dir = scratch("roundtrip");
     let store = JsonStore::new(dir.join("corvo/workspaces.json"));
-    let items = vec![Workspace::new(1, "work", vec![PathBuf::from("/p")])];
+    let items = vec![Workspace::new(
+        Uuid::from_u128(1),
+        "work",
+        vec![PathBuf::from("/p")],
+    )];
 
     store.save(&items).unwrap();
 
@@ -68,7 +72,8 @@ fn keeps_how_the_home_was_left() {
         ..Arrangement::default()
     };
     home.nudges.insert("/p/src".to_owned(), (12.5, -3.));
-    let items = vec![Workspace::new(1, "work", vec![PathBuf::from("/p")]).arranged(home)];
+    let items =
+        vec![Workspace::new(Uuid::from_u128(1), "work", vec![PathBuf::from("/p")]).arranged(home)];
 
     store.save(&items).unwrap();
 
@@ -89,6 +94,28 @@ fn a_file_from_before_homes_were_kept_loads() {
 
     let items = JsonStore::new(&path).load().unwrap();
 
-    assert_eq!(items, [Workspace::new(1, "w", vec![PathBuf::from("/p")])]);
+    assert_eq!(
+        (items[0].name(), items[0].projects()),
+        ("w", &[PathBuf::from("/p")][..])
+    );
+    assert!(!items[0].id().is_nil());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_numbered_workspace_gets_a_uuid_that_holds() {
+    let dir = scratch("numbered");
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("workspaces.json");
+    fs::write(
+        &path,
+        r#"{ "workspaces": [{ "id": 1, "name": "w", "projects": [] }] }"#,
+    )
+    .unwrap();
+
+    let first = JsonStore::new(&path).load().unwrap();
+    let again = JsonStore::new(&path).load().unwrap();
+
+    assert_eq!(first[0].id(), again[0].id());
     fs::remove_dir_all(dir).unwrap();
 }

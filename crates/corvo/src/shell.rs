@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use corvo_domain::server::Registry;
-use corvo_domain::{Chats, Share, Workbench, Workspaces, agents, languages};
+use corvo_domain::{Chats, Share, Uuid, Workbench, Workspaces, agents, languages};
 use corvo_fs::{JsonChats, LocalFs};
 use corvo_lsp::{Hub, Note};
 use corvo_ui::keys::{Dismiss, Save, ShowCode};
@@ -33,7 +33,7 @@ use crate::pane::structure::{self, Structure};
 pub struct Shell {
     focus: FocusHandle,
     spaces: Entity<Workspaces>,
-    id: u64,
+    id: Uuid,
     bench: Entity<Workbench>,
     hub: Entity<Hub>,
     // The open files, over the home while shown, with the file tree and the active file's
@@ -61,7 +61,7 @@ pub struct Shell {
 impl Shell {
     pub fn new(
         spaces: Entity<Workspaces>,
-        id: u64,
+        id: Uuid,
         mut bench: Workbench,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -763,7 +763,7 @@ impl Render for Shell {
 }
 
 // The chats kept for the workspace; ones that do not read leave it with none, and say why.
-fn load_chats(workspace: u64) -> (Chats, Option<String>) {
+fn load_chats(workspace: Uuid) -> (Chats, Option<String>) {
     let store = || {
         JsonChats::config()
             .unwrap_or_else(|_| JsonChats::new(std::env::temp_dir().join("corvo-chats")))
@@ -779,7 +779,7 @@ fn load_chats(workspace: u64) -> (Chats, Option<String>) {
 
 // The folder a new chat works in: the project isolated in the home, the one the active tab
 // belongs to, or the first one of the workspace.
-fn focused(bench: Entity<Workbench>, spaces: Entity<Workspaces>, id: u64) -> Project {
+fn focused(bench: Entity<Workbench>, spaces: Entity<Workspaces>, id: Uuid) -> Project {
     Rc::new(move |cx: &App| {
         let open = bench.read(cx);
         open.atlas()

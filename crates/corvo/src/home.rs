@@ -1,4 +1,5 @@
-use corvo_domain::Workspaces;
+use corvo_domain::{Uuid, Workspaces};
+use corvo_fs::JsonChats;
 use corvo_ui::button::Button;
 use corvo_ui::list::Row;
 use corvo_ui::{field, notice};
@@ -9,7 +10,7 @@ use gpui_kit::{
 };
 
 pub enum Event {
-    Enter(u64),
+    Enter(Uuid),
 }
 
 pub struct Home {
@@ -54,9 +55,12 @@ impl Home {
         cx.notify();
     }
 
-    fn remove(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    // The workspace goes with its chats.
+    fn remove(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         if let Err(err) = self.spaces.update(cx, |spaces, _| spaces.remove(id)) {
             notice::error(err.to_string(), window, cx);
+        } else if let Err(err) = JsonChats::config().and_then(|chats| chats.forget(id)) {
+            notice::error(format!("chats: {err}"), window, cx);
         }
         cx.notify();
     }

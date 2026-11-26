@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use corvo_domain::port::ChatStore;
-use corvo_domain::{Answer, Ask, Chat, Chats, Diff, End, Entry, Pick, Status, Step, StepKind, ago};
+use corvo_domain::{
+    Answer, Ask, Chat, Chats, Diff, End, Entry, Pick, Status, Step, StepKind, Uuid, ago,
+};
 
 fn chat() -> Chat {
     Chat::new(1, "claude", "/p", 100)
@@ -198,10 +200,10 @@ fn modes_that_skip_asking_are_risky() {
 }
 
 #[derive(Clone, Default)]
-struct Memory(Rc<RefCell<Vec<(u64, Chat)>>>);
+struct Memory(Rc<RefCell<Vec<(Uuid, Chat)>>>);
 
 impl ChatStore for Memory {
-    fn load(&self, workspace: u64) -> io::Result<Vec<Chat>> {
+    fn load(&self, workspace: Uuid) -> io::Result<Vec<Chat>> {
         Ok(self
             .0
             .borrow()
@@ -211,14 +213,14 @@ impl ChatStore for Memory {
             .collect())
     }
 
-    fn save(&self, workspace: u64, chat: &Chat) -> io::Result<()> {
+    fn save(&self, workspace: Uuid, chat: &Chat) -> io::Result<()> {
         let mut items = self.0.borrow_mut();
         items.retain(|(ws, kept)| !(*ws == workspace && kept.id() == chat.id()));
         items.push((workspace, chat.clone()));
         Ok(())
     }
 
-    fn remove(&self, workspace: u64, id: u64) -> io::Result<()> {
+    fn remove(&self, workspace: Uuid, id: u64) -> io::Result<()> {
         self.0
             .borrow_mut()
             .retain(|(ws, kept)| !(*ws == workspace && kept.id() == id));
@@ -229,7 +231,7 @@ impl ChatStore for Memory {
 #[test]
 fn chats_keep_only_what_has_messages() {
     let store = Memory::default();
-    let mut chats = Chats::load(7, Box::new(store.clone())).unwrap();
+    let mut chats = Chats::load(Uuid::from_u128(7), Box::new(store.clone())).unwrap();
     let id = chats.create("claude", &PathBuf::from("/p"), 100);
     chats.save(id).unwrap();
     assert!(store.0.borrow().is_empty());
@@ -237,15 +239,19 @@ fn chats_keep_only_what_has_messages() {
     chats.save(id).unwrap();
     assert_eq!(store.0.borrow().len(), 1);
 
-    let again = Chats::load(7, Box::new(store.clone())).unwrap();
+    let again = Chats::load(Uuid::from_u128(7), Box::new(store.clone())).unwrap();
     assert_eq!(again.active_id(), Some(id));
     assert!(!again.active().unwrap().is_working(), "settled on load");
-    assert!(Chats::load(8, Box::new(store)).unwrap().is_empty());
+    assert!(
+        Chats::load(Uuid::from_u128(8), Box::new(store))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
 fn a_new_chat_drops_the_empty_one_picked() {
-    let mut chats = Chats::load(1, Box::new(Memory::default())).unwrap();
+    let mut chats = Chats::load(Uuid::from_u128(1), Box::new(Memory::default())).unwrap();
     chats.create("claude", &PathBuf::from("/p"), 100);
     let id = chats.create("claude", &PathBuf::from("/p"), 101);
     assert_eq!(chats.len(), 1);
@@ -255,7 +261,7 @@ fn a_new_chat_drops_the_empty_one_picked() {
 #[test]
 fn archiving_or_deleting_the_picked_chat_moves_on() {
     let store = Memory::default();
-    let mut chats = Chats::load(1, Box::new(store.clone())).unwrap();
+    let mut chats = Chats::load(Uuid::from_u128(1), Box::new(store.clone())).unwrap();
     let old = chats.create("claude", &PathBuf::from("/p"), 100);
     chats.active_mut().unwrap().ask("um", 100);
     let new = chats.create("codex", &PathBuf::from("/p"), 200);

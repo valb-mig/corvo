@@ -2,7 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use corvo_domain::port::ChatStore;
-use corvo_domain::{Chat, Diff, End, Entry, Part, Reply, Status, Step, StepKind};
+use corvo_domain::{Chat, Diff, End, Entry, Part, Reply, Status, Step, StepKind, Uuid};
 use serde::{Deserialize, Serialize};
 
 // One file per chat, in a folder per workspace. A question the agent was waiting on is not kept:
@@ -275,18 +275,26 @@ impl JsonChats {
         Ok(Self::new(crate::store::config_dir()?.join("chats")))
     }
 
-    fn folder(&self, workspace: u64) -> PathBuf {
+    // The chats of a removed workspace go with it.
+    pub fn forget(&self, workspace: Uuid) -> io::Result<()> {
+        match std::fs::remove_dir_all(self.folder(workspace)) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            done => done,
+        }
+    }
+
+    fn folder(&self, workspace: Uuid) -> PathBuf {
         self.dir.join(workspace.to_string())
     }
 
-    fn path(&self, workspace: u64, id: u64) -> PathBuf {
+    fn path(&self, workspace: Uuid, id: u64) -> PathBuf {
         self.folder(workspace).join(format!("{id}.json"))
     }
 }
 
 impl ChatStore for JsonChats {
     // A file that no longer reads is left where it is, out of the list.
-    fn load(&self, workspace: u64) -> io::Result<Vec<Chat>> {
+    fn load(&self, workspace: Uuid) -> io::Result<Vec<Chat>> {
         let dir = self.folder(workspace);
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
@@ -306,7 +314,7 @@ impl ChatStore for JsonChats {
         Ok(chats)
     }
 
-    fn save(&self, workspace: u64, chat: &Chat) -> io::Result<()> {
+    fn save(&self, workspace: Uuid, chat: &Chat) -> io::Result<()> {
         let path = self.path(workspace, chat.id());
         let text = serde_json::to_string_pretty(&File::from(chat)).map_err(io::Error::other)?;
         std::fs::create_dir_all(self.folder(workspace))?;
@@ -315,7 +323,7 @@ impl ChatStore for JsonChats {
         std::fs::rename(tmp, path)
     }
 
-    fn remove(&self, workspace: u64, id: u64) -> io::Result<()> {
+    fn remove(&self, workspace: Uuid, id: u64) -> io::Result<()> {
         match std::fs::remove_file(self.path(workspace, id)) {
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
             done => done,

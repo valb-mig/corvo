@@ -1,12 +1,16 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use uuid::Uuid;
+
 use crate::Arrangement;
 use crate::port::Store;
 
+// Its id is a UUID, never handed out again: a workspace made after another is removed can't
+// take what was kept under the old one's id, like its chats.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Workspace {
-    id: u64,
+    id: Uuid,
     name: String,
     projects: Vec<PathBuf>,
     // How its home was left.
@@ -14,7 +18,7 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(id: u64, name: impl Into<String>, projects: Vec<PathBuf>) -> Self {
+    pub fn new(id: Uuid, name: impl Into<String>, projects: Vec<PathBuf>) -> Self {
         Self {
             id,
             name: name.into(),
@@ -28,7 +32,7 @@ impl Workspace {
         self
     }
 
-    pub fn id(&self) -> u64 {
+    pub fn id(&self) -> Uuid {
         self.id
     }
 
@@ -72,11 +76,11 @@ impl Workspaces {
         &self.items
     }
 
-    pub fn get(&self, id: u64) -> Option<&Workspace> {
+    pub fn get(&self, id: Uuid) -> Option<&Workspace> {
         self.items.iter().find(|item| item.id == id)
     }
 
-    pub fn add(&mut self, name: &str) -> io::Result<u64> {
+    pub fn add(&mut self, name: &str) -> io::Result<Uuid> {
         let name = name.trim();
         if name.is_empty() {
             return Err(io::Error::new(
@@ -84,18 +88,18 @@ impl Workspaces {
                 "workspace name is empty",
             ));
         }
-        let id = self.items.iter().map(Workspace::id).max().unwrap_or(0) + 1;
+        let id = Uuid::new_v4();
         self.items.push(Workspace::new(id, name, Vec::new()));
         self.save()?;
         Ok(id)
     }
 
-    pub fn remove(&mut self, id: u64) -> io::Result<()> {
+    pub fn remove(&mut self, id: Uuid) -> io::Result<()> {
         self.items.retain(|item| item.id != id);
         self.save()
     }
 
-    pub fn link(&mut self, id: u64, project: &Path) -> io::Result<()> {
+    pub fn link(&mut self, id: Uuid, project: &Path) -> io::Result<()> {
         let Some(item) = self.item_mut(id) else {
             return Ok(());
         };
@@ -105,7 +109,7 @@ impl Workspaces {
         self.save()
     }
 
-    pub fn unlink(&mut self, id: u64, project: &Path) -> io::Result<()> {
+    pub fn unlink(&mut self, id: Uuid, project: &Path) -> io::Result<()> {
         if let Some(item) = self.item_mut(id) {
             item.projects.retain(|known| known != project);
         }
@@ -113,7 +117,7 @@ impl Workspaces {
     }
 
     // Keeps how the home was left, saving only when it changed.
-    pub fn arrange(&mut self, id: u64, home: Arrangement) -> io::Result<()> {
+    pub fn arrange(&mut self, id: Uuid, home: Arrangement) -> io::Result<()> {
         let Some(item) = self.item_mut(id) else {
             return Ok(());
         };
@@ -124,7 +128,7 @@ impl Workspaces {
         self.save()
     }
 
-    fn item_mut(&mut self, id: u64) -> Option<&mut Workspace> {
+    fn item_mut(&mut self, id: Uuid) -> Option<&mut Workspace> {
         self.items.iter_mut().find(|item| item.id == id)
     }
 

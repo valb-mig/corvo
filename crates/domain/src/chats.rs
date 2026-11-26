@@ -1,20 +1,22 @@
 use std::io;
 use std::path::Path;
 
+use uuid::Uuid;
+
 use crate::Chat;
 use crate::port::ChatStore;
 
 // The chats of a workspace, and the one picked, which the agent bar writes to. A chat is kept
 // once it has a message; one left empty goes with the app.
 pub struct Chats {
-    workspace: u64,
+    workspace: Uuid,
     store: Box<dyn ChatStore>,
     items: Vec<Chat>,
     active: Option<u64>,
 }
 
 impl Chats {
-    pub fn load(workspace: u64, store: Box<dyn ChatStore>) -> io::Result<Self> {
+    pub fn load(workspace: Uuid, store: Box<dyn ChatStore>) -> io::Result<Self> {
         let mut items = store.load(workspace)?;
         for chat in &mut items {
             chat.settle();
@@ -31,7 +33,7 @@ impl Chats {
     }
 
     // No chats, as when the kept ones could not be read.
-    pub fn empty(workspace: u64, store: Box<dyn ChatStore>) -> Self {
+    pub fn empty(workspace: Uuid, store: Box<dyn ChatStore>) -> Self {
         Self {
             workspace,
             store,

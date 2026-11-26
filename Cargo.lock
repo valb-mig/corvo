@@ -1099,6 +1099,9 @@ dependencies = [
 [[package]]
 name = "corvo-domain"
 version = "0.1.0"
+dependencies = [
+ "uuid",
+]
 
 [[package]]
 name = "corvo-fs"

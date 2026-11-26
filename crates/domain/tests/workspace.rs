@@ -49,11 +49,12 @@ fn ids_stay_unique_after_remove() {
     let a = spaces.add("a").unwrap();
     let b = spaces.add("b").unwrap();
 
-    spaces.remove(a).unwrap();
+    spaces.remove(b).unwrap();
     let c = spaces.add("c").unwrap();
 
+    assert_ne!(c, a);
     assert_ne!(c, b);
-    assert!(spaces.get(a).is_none());
+    assert!(spaces.get(b).is_none());
 }
 
 #[test]

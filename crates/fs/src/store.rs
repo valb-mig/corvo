@@ -3,7 +3,7 @@ use std::io;
 use std::path::PathBuf;
 
 use corvo_domain::port::Store;
-use corvo_domain::{Arrangement, Group, Mark, Node, Workspace};
+use corvo_domain::{Arrangement, Group, Mark, Node, Uuid, Workspace};
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Deserialize, Serialize)]
@@ -13,11 +13,20 @@ struct File {
 
 #[derive(Deserialize, Serialize)]
 struct Entry {
-    id: u64,
+    id: Id,
     name: String,
     projects: Vec<PathBuf>,
     #[serde(default)]
     home: Home,
+}
+
+// A workspace from before ids were UUIDs has a number, which a newer one could take again; it
+// gets a UUID of its own when the file loads, and leaves what was kept under the number behind.
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum Id {
+    Uuid(Uuid),
+    Old(u64),
 }
 
 // How the home was left; a file from before it was kept loads as an empty one.
@@ -213,13 +222,26 @@ impl Store for JsonStore {
                 format!("{}: {err}", self.path.display()),
             )
         })?;
-        Ok(file
+        let old = file
+            .workspaces
+            .iter()
+            .any(|entry| matches!(entry.id, Id::Old(_)));
+        let items: Vec<Workspace> = file
             .workspaces
             .into_iter()
             .map(|entry| {
-                Workspace::new(entry.id, entry.name, entry.projects).arranged(entry.home.into())
+                let id = match entry.id {
+                    Id::Uuid(id) => id,
+                    Id::Old(_) => Uuid::new_v4(),
+                };
+                Workspace::new(id, entry.name, entry.projects).arranged(entry.home.into())
             })
-            .collect())
+            .collect();
+        // Written down at once, so the new ids hold from now on.
+        if old {
+            self.save(&items)?;
+        }
+        Ok(items)
     }
 
     fn save(&self, items: &[Workspace]) -> io::Result<()> {
@@ -227,7 +249,7 @@ impl Store for JsonStore {
             workspaces: items
                 .iter()
                 .map(|item| Entry {
-                    id: item.id(),
+                    id: Id::Uuid(item.id()),
                     name: item.name().to_owned(),
                     projects: item.projects().to_vec(),
                     home: item.home().into(),

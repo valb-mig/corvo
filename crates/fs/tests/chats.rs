@@ -2,8 +2,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use corvo_domain::port::ChatStore;
-use corvo_domain::{Answer, Ask, Chat, Diff, End, Status, Step, StepKind};
+use corvo_domain::{Answer, Ask, Chat, Diff, End, Status, Step, StepKind, Uuid};
 use corvo_fs::JsonChats;
+
+const SPACE: Uuid = Uuid::from_u128(1);
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("corvo-chats-{name}-{}", std::process::id()));
@@ -38,17 +40,17 @@ fn chat() -> Chat {
 #[test]
 fn missing_folder_loads_empty() {
     let store = JsonChats::new(scratch("missing"));
-    assert!(store.load(1).unwrap().is_empty());
+    assert!(store.load(SPACE).unwrap().is_empty());
 }
 
 #[test]
 fn saves_and_loads_back_per_workspace() {
     let store = JsonChats::new(scratch("roundtrip"));
     let chat = chat();
-    store.save(1, &chat).unwrap();
+    store.save(SPACE, &chat).unwrap();
 
-    assert_eq!(store.load(1).unwrap(), vec![chat]);
-    assert!(store.load(2).unwrap().is_empty());
+    assert_eq!(store.load(SPACE).unwrap(), vec![chat]);
+    assert!(store.load(Uuid::from_u128(2)).unwrap().is_empty());
 }
 
 #[test]
@@ -66,9 +68,9 @@ fn a_waiting_question_is_not_kept() {
         }],
     }));
     chat.reply_mut().unwrap().step(step);
-    store.save(1, &chat).unwrap();
+    store.save(SPACE, &chat).unwrap();
 
-    let back = store.load(1).unwrap().remove(0);
+    let back = store.load(SPACE).unwrap().remove(0);
     assert!(back.last_reply().unwrap().asking().is_none());
 }
 
@@ -76,17 +78,26 @@ fn a_waiting_question_is_not_kept() {
 fn removing_takes_the_file_and_ignores_a_missing_one() {
     let dir = scratch("remove");
     let store = JsonChats::new(&dir);
-    store.save(1, &chat()).unwrap();
-    store.remove(1, 3).unwrap();
-    store.remove(1, 3).unwrap();
-    assert!(store.load(1).unwrap().is_empty());
+    store.save(SPACE, &chat()).unwrap();
+    store.remove(SPACE, 3).unwrap();
+    store.remove(SPACE, 3).unwrap();
+    assert!(store.load(SPACE).unwrap().is_empty());
+}
+
+#[test]
+fn forgetting_a_workspace_takes_its_chats() {
+    let store = JsonChats::new(scratch("forget"));
+    store.save(SPACE, &chat()).unwrap();
+    store.forget(SPACE).unwrap();
+    store.forget(SPACE).unwrap();
+    assert!(store.load(SPACE).unwrap().is_empty());
 }
 
 #[test]
 fn a_broken_file_is_left_out() {
     let dir = scratch("broken");
     let store = JsonChats::new(&dir);
-    store.save(1, &chat()).unwrap();
-    fs::write(dir.join("1").join("9.json"), "{ not json").unwrap();
-    assert_eq!(store.load(1).unwrap().len(), 1);
+    store.save(SPACE, &chat()).unwrap();
+    fs::write(dir.join(SPACE.to_string()).join("9.json"), "{ not json").unwrap();
+    assert_eq!(store.load(SPACE).unwrap().len(), 1);
 }
