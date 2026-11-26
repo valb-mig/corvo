@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use corvo_domain::server::Registry;
 use corvo_domain::{Chats, Share, Uuid, Workbench, Workspaces, agents, languages};
-use corvo_fs::{JsonChats, LocalFs};
+use corvo_fs::{JsonChats, JsonOptions, LocalFs};
 use corvo_lsp::{Hub, Note};
 use corvo_ui::keys::{Dismiss, Save, ShowCode, ToggleTree};
 use corvo_ui::language_icon::LanguageIcon;
@@ -86,7 +86,8 @@ impl Shell {
 
         let (chat_list, trouble) = load_chats(id);
         let (agent_hub, mut agent_events) = corvo_agent::Hub::new(agents());
-        let agents = cx.new(|_| Agents::new(agent_hub, chat_list));
+        let store = Box::new(option_store());
+        let agents = cx.new(|_| Agents::new(agent_hub, chat_list, store));
         let project = focused(bench.clone(), spaces.clone(), id);
         let name = spaces
             .read(cx)
@@ -784,6 +785,12 @@ impl Render for Shell {
             )
             .child(status)
     }
+}
+
+// What each agent offered last, kept between runs.
+fn option_store() -> JsonOptions {
+    JsonOptions::config()
+        .unwrap_or_else(|_| JsonOptions::new(std::env::temp_dir().join("corvo-agents.json")))
 }
 
 // The chats kept for the workspace; ones that do not read leave it with none, and say why.

@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use corvo_agent::{Event, Hub, Patch};
+use corvo_domain::port::OptionStore;
 use corvo_domain::{Chat, Chats, End, Options, Reply};
 use gpui_kit::{Context, EventEmitter};
 
@@ -20,8 +21,10 @@ pub struct Agents {
     chats: Chats,
     options: HashMap<u64, Options>,
     // What each agent offered its last new session, shown while a chat waits for its own; the
-    // picks made meanwhile reach the session once it is there.
+    // picks made meanwhile reach the session once it is there. Kept between runs, so the picker
+    // has it before the agent starts.
     known: HashMap<String, Options>,
+    store: Box<dyn OptionStore>,
     pending: HashMap<u64, Vec<(String, String)>>,
     opening: HashSet<u64>,
     thinking: HashSet<u64>,
@@ -32,7 +35,7 @@ pub struct Agents {
 impl EventEmitter<Note> for Agents {}
 
 impl Agents {
-    pub fn new(hub: Hub, chats: Chats) -> Self {
+    pub fn new(hub: Hub, chats: Chats, store: Box<dyn OptionStore>) -> Self {
         let agent = chats
             .active()
             .map(|chat| chat.agent().to_owned())
@@ -48,7 +51,9 @@ impl Agents {
             hub,
             chats,
             options: HashMap::new(),
-            known: HashMap::new(),
+            // A file that no longer reads only costs the wait for the agent.
+            known: store.load().unwrap_or_default(),
+            store,
             pending: HashMap::new(),
             opening: HashSet::new(),
             thinking: HashSet::new(),
@@ -285,7 +290,13 @@ impl Agents {
                 self.opening.remove(&chat);
                 if let Some(kept) = self.chats.get_mut(chat) {
                     kept.set_session(Some(session));
-                    self.known.insert(kept.agent().to_owned(), options.clone());
+                    let agent = kept.agent().to_owned();
+                    if self.known.get(&agent) != Some(&options) {
+                        self.known.insert(agent, options.clone());
+                        if let Err(err) = self.store.save(&self.known) {
+                            cx.emit(Note::Notice(format!("agents: {err}")));
+                        }
+                    }
                 }
                 for (option, value) in self.pending.remove(&chat).unwrap_or_default() {
                     self.hub.set(chat, &option, &value);
