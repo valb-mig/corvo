@@ -403,7 +403,11 @@ impl Render for Picker {
         let agents = self.agents.read(cx);
         let current = agents.agent().to_owned();
 
-        let rows = agents.hub().specs().iter().enumerate().map(|(ix, spec)| {
+        // Only the agents the dev has, and the chat's own even when it is gone.
+        let rows = agents.hub().specs().iter().enumerate().filter(|(_, spec)| {
+            spec.id() == current || agents.hub().available(spec.id())
+        });
+        let rows = rows.map(|(ix, spec)| {
             let id = spec.id().to_owned();
             let on = id == current;
             let missing = !agents.hub().available(&id);

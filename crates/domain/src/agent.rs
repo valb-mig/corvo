@@ -6,6 +6,8 @@ pub struct AgentSpec {
     name: String,
     program: String,
     args: Vec<String>,
+    // The agent's own program, when another one starts it: without it the agent is not there.
+    needs: Option<String>,
     install: String,
 }
 
@@ -22,8 +24,14 @@ impl AgentSpec {
             name: name.into(),
             program: program.into(),
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            needs: None,
             install: install.into(),
         }
+    }
+
+    pub fn needs(mut self, program: impl Into<String>) -> Self {
+        self.needs = Some(program.into());
+        self
     }
 
     pub fn id(&self) -> &str {
@@ -40,6 +48,10 @@ impl AgentSpec {
 
     pub fn args(&self) -> &[String] {
         &self.args
+    }
+
+    pub fn needed(&self) -> Option<&str> {
+        self.needs.as_deref()
     }
 
     pub fn install(&self) -> &str {
@@ -60,7 +72,8 @@ pub fn agents() -> Vec<AgentSpec> {
                 "@agentclientprotocol/claude-agent-acp",
             ],
             "Node with npx, and Claude Code logged in",
-        ),
+        )
+        .needs("claude"),
         AgentSpec::new(
             "opencode",
             "opencode",
@@ -81,7 +94,8 @@ pub fn agents() -> Vec<AgentSpec> {
             "npx",
             &["--prefer-offline", "-y", "@zed-industries/codex-acp"],
             "Node with npx, and Codex logged in",
-        ),
+        )
+        .needs("codex"),
     ]
 }
 

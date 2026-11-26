@@ -129,10 +129,11 @@ impl Hub {
         self.specs.iter().find(|spec| spec.id() == id)
     }
 
-    // Whether the agent's program is there to start.
+    // Whether the agent's program is there to start, and its own when another one starts it.
     pub fn available(&self, id: &str) -> bool {
-        self.spec(id)
-            .is_some_and(|spec| find(spec.program()).is_some())
+        self.spec(id).is_some_and(|spec| {
+            find(spec.program()).is_some() && spec.needed().is_none_or(|own| find(own).is_some())
+        })
     }
 
     // Starts the agent ahead of the first chat that needs it, so that chat only waits on its

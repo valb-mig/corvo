@@ -225,6 +225,15 @@ fn a_lost_session_starts_anew_and_is_told() {
 }
 
 #[test]
+fn an_agent_whose_own_program_is_missing_is_not_there() {
+    let (hub, _) = start(
+        AgentSpec::new("ghost", "Ghost", "python3", &[], "npm i -g ghost")
+            .needs("corvo-no-such-agent"),
+    );
+    assert!(!hub.available("ghost"));
+}
+
+#[test]
 fn a_missing_agent_says_how_to_install_it() {
     let (hub, mut events) = start(AgentSpec::new(
         "ghost",
