@@ -8,10 +8,9 @@ use corvo_ui::file_icon::{FileIcon, FolderIcon};
 use corvo_ui::graph::{self, Branch, Camera, Card, Graph};
 use corvo_ui::{field, notice};
 use gpui_kit::assets::IconName as Glyph;
-use gpui_kit::component::{ActiveTheme as _, Icon};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, EventEmitter, IntoElement, Render, SharedString,
-    Styled as _, Subscription, WeakEntity, Window,
+    Subscription, WeakEntity, Window,
 };
 
 pub enum Event {
@@ -47,13 +46,12 @@ enum Act {
     Leave(String),
 }
 
-// The home of the workspace: the workspace and its projects, or one project as the root with
-// any number of its folders open, as a tree read left to right. A click on a file opens its
+// The home of the workspace: its projects, or one project as the root with any number of its
+// folders open, as a tree read left to right. A click on a file opens its
 // code. Cards are known by a key that holds between runs: a folder or file by its path.
 pub struct Overview {
     bench: Entity<Workbench>,
     registry: Registry,
-    name: SharedString,
     camera: Camera,
     // The card that can be hidden under each key, as last rendered.
     places: RefCell<HashMap<SharedString, (Place, String)>>,
@@ -68,21 +66,13 @@ impl Overview {
         Self {
             bench,
             registry,
-            name: SharedString::default(),
             camera: Camera::default(),
             places: RefCell::default(),
             naming: None,
         }
     }
 
-    pub fn chart(
-        &mut self,
-        name: impl Into<SharedString>,
-        projects: &[PathBuf],
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.name = name.into();
+    pub fn chart(&mut self, projects: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
         let charted = self.bench.update(cx, |bench, _| bench.chart(projects));
         self.report(charted, window, cx);
     }
@@ -208,24 +198,19 @@ impl Overview {
         self.act(&Act::HideMany(hidden), window, cx);
     }
 
-    fn workspace(&self, atlas: &Atlas, view: &WeakEntity<Self>, cx: &Context<Self>) -> Branch {
-        let count = atlas.projects().len();
-        let meta = match count {
-            0 => "No projects linked".to_owned(),
-            1 => "1 project".to_owned(),
-            n => format!("{n} projects"),
-        };
-        let tint = cx.theme().muted_foreground;
-        let link = view.clone();
-        let card = Card::new("workspace", self.name.clone())
-            .icon(move |size| Icon::new(Glyph::LayoutGrid).size(size).text_color(tint))
-            .meta(meta)
-            .action("Link folder…", Glyph::FolderPlus, move |_, cx| {
-                link.update(cx, |_, cx| cx.emit(Event::Link)).ok();
-            });
-        let card = self.grouped(card, atlas, view);
-        // Picking a project stands it alone as the root.
-        let projects = atlas
+    // The linked projects, each a root: picking one stands it alone.
+    fn workspace(&self, atlas: &Atlas, view: &WeakEntity<Self>) -> Vec<Branch> {
+        if atlas.projects().is_empty() {
+            let link = view.clone();
+            let card = Card::new("note:workspace", "No projects linked")
+                .muted(true)
+                .meta("Click to link a folder")
+                .on_click(move |_, cx| {
+                    link.update(cx, |_, cx| cx.emit(Event::Link)).ok();
+                });
+            return vec![Branch::new(card)];
+        }
+        let projects: Vec<Branch> = atlas
             .projects()
             .iter()
             .filter(|project| shown(atlas, Place::Node((*project).clone()), &id(project)))
@@ -234,11 +219,16 @@ impl Overview {
                 let act = Act::Isolate(Some(project.clone()));
                 let card = self.node_card(atlas, &node, false, act, view);
                 Branch::new(unlinkable(self.hideable(card, &node, view), project, view))
-            });
-        Branch::new(card).open(true).children(projects)
+            })
+            .collect();
+        if projects.is_empty() {
+            let card = Card::new("note:workspace", "All projects hidden").muted(true);
+            return vec![Branch::new(card)];
+        }
+        projects
     }
 
-    // The isolated project, open, and clicking it goes back to the workspace.
+    // The isolated project, open, and clicking it goes back to all of them.
     fn project(&self, atlas: &Atlas, root: &Path, view: &WeakEntity<Self>) -> Branch {
         let node = Node::dir(root);
         let card = self.node_card(atlas, &node, true, Act::Isolate(None), view);
@@ -371,9 +361,9 @@ impl Render for Overview {
         self.places.borrow_mut().clear();
         let view = cx.entity().downgrade();
         let atlas = self.bench.read(cx).atlas();
-        let root = match atlas.root() {
-            Some(root) => self.project(atlas, root, &view),
-            None => self.workspace(atlas, &view, cx),
+        let roots = match atlas.root() {
+            Some(root) => vec![self.project(atlas, root, &view)],
+            None => self.workspace(atlas, &view),
         };
         let nudges = atlas
             .nudges()
@@ -387,7 +377,7 @@ impl Render for Overview {
             .map(|group| self.group(group, &view))
             .collect();
         let (moved, grouped, hidden, tidy) = (view.clone(), view.clone(), view.clone(), view);
-        Graph::new("overview", &self.camera, root)
+        Graph::new("overview", &self.camera, roots)
             .nudges(nudges)
             .groups(groups)
             .on_move(move |moves, window, cx| {

@@ -283,28 +283,37 @@ pub struct Spot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
-    pub root: Spot,
+    pub roots: Vec<Spot>,
     pub width: f32,
     pub height: f32,
 }
 
 // Every depth is a column as wide as its widest card. A card sits halfway between the first and
 // the last card it holds, and each branch takes the height of all it holds, so the cards around it
-// make room and nothing overlaps however much is open.
-pub fn layout(root: &Shape) -> Layout {
+// make room and nothing overlaps however much is open. The roots stack down the first column the
+// same way.
+pub fn layout(roots: &[Shape]) -> Layout {
     let mut widths = Vec::new();
-    measure(root, 0, &mut widths);
+    for root in roots {
+        measure(root, 0, &mut widths);
+    }
     let mut lefts = Vec::with_capacity(widths.len());
     let mut x = PAD;
     for width in &widths {
         lefts.push(x);
         x += width + SPAN;
     }
-    let (root, bottom) = place(root, 0, PAD, &lefts);
+    let mut top = PAD;
+    let mut spots = Vec::with_capacity(roots.len());
+    for root in roots {
+        let (spot, bottom) = place(root, 0, top, &lefts);
+        spots.push(spot);
+        top = bottom + GAP;
+    }
     Layout {
-        root,
-        width: x - SPAN + PAD,
-        height: bottom + PAD,
+        roots: spots,
+        width: (x - SPAN).max(PAD) + PAD,
+        height: (top - GAP).max(PAD) + PAD,
     }
 }
 
@@ -815,7 +824,7 @@ struct Edge {
 pub struct Graph {
     id: ElementId,
     camera: Camera,
-    root: Branch,
+    roots: Vec<Branch>,
     nudges: HashMap<SharedString, (f32, f32)>,
     groups: Vec<Group>,
     on_move: Option<Moves>,
@@ -825,11 +834,15 @@ pub struct Graph {
 }
 
 impl Graph {
-    pub fn new(id: impl Into<ElementId>, camera: &Camera, root: Branch) -> Self {
+    pub fn new(
+        id: impl Into<ElementId>,
+        camera: &Camera,
+        roots: impl IntoIterator<Item = Branch>,
+    ) -> Self {
         Self {
             id: id.into(),
             camera: camera.clone(),
-            root,
+            roots: roots.into_iter().collect(),
             nudges: HashMap::new(),
             groups: Vec::new(),
             on_move: None,
@@ -887,8 +900,8 @@ impl Graph {
 impl RenderOnce for Graph {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
-        let shape = shape(&self.root);
-        let layout = layout(&shape);
+        let shapes: Vec<Shape> = self.roots.iter().map(shape).collect();
+        let layout = layout(&shapes);
         let camera = self.camera;
         let view = View::new(camera.zoom());
         let zoom = view.zoom;
@@ -907,7 +920,9 @@ impl RenderOnce for Graph {
             nudges: &nudges,
             placed: &mut placed,
         };
-        placing.lay(self.root, &shape, &layout.root, (0., 0.), None);
+        for ((root, shape), spot) in self.roots.into_iter().zip(&shapes).zip(&layout.roots) {
+            placing.lay(root, shape, spot, (0., 0.), None);
+        }
 
         // The collapsed group each card is out of sight in: that of a card holding it, or its own.
         let folds: HashMap<&SharedString, usize> = self

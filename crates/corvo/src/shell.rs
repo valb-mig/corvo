@@ -243,14 +243,8 @@ impl Shell {
 
     fn chart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let linked = self.linked(cx);
-        let name = self
-            .spaces
-            .read(cx)
-            .get(self.id)
-            .map(|space| space.name().to_owned())
-            .unwrap_or_default();
         self.home
-            .update(cx, |home, cx| home.chart(name, &linked, window, cx));
+            .update(cx, |home, cx| home.chart(&linked, window, cx));
     }
 
     fn rescope(&mut self, cx: &mut Context<Self>) {
@@ -730,6 +724,7 @@ impl Render for Shell {
         };
         let shell = cx.entity().downgrade();
         let coder = cx.entity().downgrade();
+        let linker = cx.entity().downgrade();
         let mut status = StatusBar::new()
             .item(
                 Action::new("code", Glyph::Code, tip).on_click(move |window, cx| {
@@ -737,6 +732,13 @@ impl Render for Shell {
                         .update(cx, |shell, cx| shell.toggle_code(window, cx))
                         .ok();
                 }),
+            )
+            .item(
+                Action::new("link", Glyph::FolderPlus, "Link folder…").on_click(
+                    move |window, cx| {
+                        linker.update(cx, |shell, cx| shell.browse(window, cx)).ok();
+                    },
+                ),
             )
             .item(
                 Popup::new("hidden", label, self.hidden.clone())

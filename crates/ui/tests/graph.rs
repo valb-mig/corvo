@@ -30,30 +30,30 @@ fn middle(spot: &Spot) -> f32 {
 
 #[test]
 fn a_lone_card_sits_at_the_padding() {
-    let layout = layout(&leaf());
+    let layout = layout(&[leaf()]);
 
-    assert_eq!((layout.root.x, layout.root.y), (PAD, PAD));
+    assert_eq!((layout.roots[0].x, layout.roots[0].y), (PAD, PAD));
     assert_eq!(layout.width, PAD * 2. + WIDTH);
     assert_eq!(layout.height, PAD * 2. + HEIGHT);
 }
 
 #[test]
 fn a_card_sits_in_the_middle_of_what_it_holds() {
-    let layout = layout(&card(vec![leaf(), leaf(), leaf()]));
+    let layout = layout(&[card(vec![leaf(), leaf(), leaf()])]);
 
-    let kids = &layout.root.children;
+    let kids = &layout.roots[0].children;
     assert_eq!(kids[0].x, PAD + WIDTH + SPAN);
     assert_eq!(kids[0].y, PAD);
     assert_eq!(kids[2].y, PAD + 2. * (HEIGHT + GAP));
-    assert_eq!(header(&layout.root), middle(&layout.root));
+    assert_eq!(header(&layout.roots[0]), middle(&layout.roots[0]));
     assert_eq!(layout.height, PAD * 2. + 3. * HEIGHT + 2. * GAP);
 }
 
 #[test]
 fn a_lone_child_sits_level_with_its_card() {
-    let layout = layout(&card(vec![leaf()]));
+    let layout = layout(&[card(vec![leaf()])]);
 
-    assert_eq!(layout.root.children[0].y, layout.root.y);
+    assert_eq!(layout.roots[0].children[0].y, layout.roots[0].y);
 }
 
 #[test]
@@ -64,16 +64,16 @@ fn open_siblings_make_room_for_each_other() {
         card(vec![leaf(), leaf()]),
         leaf(),
     ]);
-    let layout = layout(&root);
+    let layout = layout(&[root]);
 
-    let kids = &layout.root.children;
+    let kids = &layout.roots[0].children;
     let (first, second, third) = (&kids[0], &kids[1], &kids[2]);
     assert_eq!(header(first), middle(first));
     assert_eq!(header(second), middle(second));
     let first_bottom = first.children[2].y + HEIGHT;
     assert_eq!(second.children[0].y, first_bottom + GAP);
     assert_eq!(third.y, second.children[1].y + HEIGHT + GAP);
-    assert_eq!(header(&layout.root), middle(&layout.root));
+    assert_eq!(header(&layout.roots[0]), middle(&layout.roots[0]));
 }
 
 #[test]
@@ -83,12 +83,31 @@ fn a_dropped_card_widens_its_column_and_pushes_the_cards_under_it() {
         open: true,
         children: vec![leaf()],
     };
-    let layout = layout(&card(vec![open, leaf()]));
+    let layout = layout(&[card(vec![open, leaf()])]);
 
-    let (dropped, under) = (&layout.root.children[0], &layout.root.children[1]);
+    let (dropped, under) = (&layout.roots[0].children[0], &layout.roots[0].children[1]);
     assert_eq!(dropped.children[0].y, dropped.y);
     assert_eq!(under.y, dropped.y + HEIGHT + 300. + GAP);
     assert_eq!(dropped.children[0].x, dropped.x + 600. + SPAN);
+}
+
+#[test]
+fn roots_stack_down_the_first_column() {
+    let layout = layout(&[card(vec![leaf(), leaf()]), leaf()]);
+
+    let (first, second) = (&layout.roots[0], &layout.roots[1]);
+    assert_eq!(first.x, second.x);
+    assert_eq!(header(first), middle(first));
+    assert_eq!(second.y, first.children[1].y + HEIGHT + GAP);
+    assert_eq!(layout.height, PAD * 2. + 3. * HEIGHT + 2. * GAP);
+}
+
+#[test]
+fn no_roots_is_just_the_padding() {
+    let layout = layout(&[]);
+
+    assert!(layout.roots.is_empty());
+    assert_eq!((layout.width, layout.height), (PAD * 2., PAD * 2.));
 }
 
 #[test]
