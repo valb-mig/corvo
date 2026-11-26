@@ -85,7 +85,7 @@ impl RenderOnce for TitleBar {
             .w_full()
             .h(px(34.))
             .justify_between()
-            .bg(cx.theme().title_bar)
+            .bg(cx.theme().background)
             .border_b_1()
             .border_color(cx.theme().border)
             .text_sm()
