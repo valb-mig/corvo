@@ -184,6 +184,19 @@ fn switching_agent_marks_the_chat_once() {
 }
 
 #[test]
+fn a_snippet_stays_on_one_line() {
+    let mut chat = chat();
+    chat.ask("oi", 110);
+    chat.reply_mut()
+        .unwrap()
+        .say("cargo test\n\tcargo build\nmeson");
+    chat.end(End::Done, 120);
+    let (text, at) = chat.snippet("build").unwrap();
+    assert!(!text.contains('\n') && !text.contains('\t'));
+    assert_eq!(&text.chars().skip(at).take(5).collect::<String>(), "build");
+}
+
+#[test]
 fn search_finds_title_messages_and_answers() {
     let mut chat = chat();
     chat.ask("ajusta a status bar", 110);

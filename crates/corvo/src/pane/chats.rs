@@ -19,7 +19,7 @@ use gpui_kit::{
 };
 
 use crate::agents::{Agents, now};
-use crate::pane::dock::{Project, clock, relative as from_project};
+use crate::pane::dock::{Project, clock, one_line, relative as from_project};
 
 pub enum Event {
     // An image sent in the chat, to see in the code.
@@ -29,6 +29,8 @@ pub enum Event {
 const OUTPUT: usize = 60;
 // The side of an image sent in the chat.
 const IMAGE: f32 = 120.;
+// The lines a long message of the dev shows until it is unfolded.
+const FOLDED: usize = 8;
 // The width of the list of chats.
 const LIST: f32 = 232.;
 
@@ -43,6 +45,8 @@ pub struct ChatWindow {
     deleting: Option<u64>,
     archived: bool,
     open: HashSet<(u64, String)>,
+    // The long messages of the dev shown whole, by chat and place in it.
+    unfolded: HashSet<(u64, usize)>,
     scroll: ScrollHandle,
     shown: Option<u64>,
     _subs: Vec<Subscription>,
@@ -72,6 +76,7 @@ impl ChatWindow {
             deleting: None,
             archived: false,
             open: HashSet::new(),
+            unfolded: HashSet::new(),
             scroll: ScrollHandle::new(),
             shown: None,
             _subs: subs,
@@ -505,8 +510,16 @@ impl ChatWindow {
             )
     }
 
-    // What the dev wrote: the images above, each opening in the code, and the words under them.
-    fn you(&self, message: &Message, ix: usize, view: &WeakEntity<Self>, cx: &App) -> AnyElement {
+    // What the dev wrote: the images above, each opening in the code, and the words under them,
+    // a long message folded to its first lines.
+    fn you(
+        &self,
+        chat: u64,
+        message: &Message,
+        ix: usize,
+        view: &WeakEntity<Self>,
+        cx: &App,
+    ) -> AnyElement {
         let theme = cx.theme();
         let (border, muted, secondary) = (theme.border, theme.muted_foreground, theme.secondary);
         let images = (!message.images.is_empty()).then(|| {
@@ -550,6 +563,9 @@ impl ChatWindow {
                         })
                 }))
         });
+        let key = (chat, ix);
+        let long = is_long(&message.text);
+        let folded = long && !self.unfolded.contains(&key);
         let text = (!message.text.is_empty()).then(|| {
             div()
                 .max_w(relative(0.78))
@@ -560,13 +576,31 @@ impl ChatWindow {
                 .border_1()
                 .border_color(border)
                 .text_sm()
+                .when(folded, |text| text.overflow_hidden().line_clamp(FOLDED))
                 .child(message.text.clone())
+        });
+        let fold = long.then(|| {
+            let view = view.clone();
+            Button::new(ElementId::Name(format!("fold-{chat}-{ix}").into()))
+                .ghost()
+                .xsmall()
+                .label(if folded { "Show more" } else { "Show less" })
+                .on_click(move |_, _, cx| {
+                    view.update(cx, |this, cx| {
+                        if !this.unfolded.remove(&key) {
+                            this.unfolded.insert(key);
+                        }
+                        cx.notify();
+                    })
+                    .ok();
+                })
         });
         v_flex()
             .items_end()
             .gap_2()
             .children(images)
             .children(text)
+            .children(fold)
             .into_any_element()
     }
 
@@ -585,7 +619,7 @@ impl ChatWindow {
             .iter()
             .enumerate()
             .map(|(ix, entry)| match entry {
-                Entry::You(message) => self.you(message, ix, view, cx),
+                Entry::You(message) => self.you(chat.id(), message, ix, view, cx),
                 Entry::Switch(agent) => h_flex()
                     .gap_2()
                     .text_xs()
@@ -707,8 +741,8 @@ impl ChatWindow {
         };
         let target = step
             .target()
-            .map(|target| from_project(target, chat))
-            .filter(|target| !step.title().contains(target.as_str()));
+            .filter(|target| !step.title().contains(target))
+            .map(|target| one_line(&from_project(target, chat)));
         let extra = if matches!(step.kind(), StepKind::Edit) && !step.diffs().is_empty() {
             let (add, del) = step.lines();
             Some(
@@ -762,7 +796,7 @@ impl ChatWindow {
                     } else {
                         theme.foreground
                     })
-                    .child(step.title().to_owned()),
+                    .child(one_line(step.title())),
             )
             .children(target.map(|target| {
                 div()
@@ -929,7 +963,7 @@ fn status(chat: &Chat, cx: &App) -> AnyElement {
         None => {
             let doing = reply
                 .current()
-                .map_or("Thinking".to_owned(), |step| step.title().to_owned());
+                .map_or("Thinking".to_owned(), |step| one_line(step.title()));
             line.child(Spinner::new().xsmall())
                 .child(div().truncate().child(doing))
                 .into_any_element()
@@ -942,7 +976,7 @@ fn status(chat: &Chat, cx: &App) -> AnyElement {
             )
             .into_any_element(),
         Some(_) => line
-            .child(div().truncate().child(reply.summary()))
+            .child(div().truncate().child(one_line(&reply.summary())))
             .into_any_element(),
     }
 }
@@ -967,4 +1001,10 @@ fn midnight(now: u64) -> u64 {
     }
     let into = tm.tm_hour as u64 * 3600 + tm.tm_min as u64 * 60 + tm.tm_sec as u64;
     now.saturating_sub(into)
+}
+
+// A message too long to show whole at first: more lines than shown folded, or text enough to
+// wrap past them.
+fn is_long(text: &str) -> bool {
+    text.lines().count() > FOLDED || text.chars().count() > FOLDED * 100
 }

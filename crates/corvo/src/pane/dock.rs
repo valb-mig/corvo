@@ -243,7 +243,7 @@ impl Dock {
                     .size(px(12.))
                     .text_color(theme.muted_foreground),
             ))
-            .child(div().truncate().child(said(ask)));
+            .child(div().min_w_0().truncate().child(said(ask)));
 
         let (lead_el, verb, detail, time, tint): (AnyElement, String, String, Option<u64>, Hsla) =
             match reply.end() {
@@ -252,7 +252,7 @@ impl Dock {
                     "Waiting for you".to_owned(),
                     reply
                         .asking()
-                        .map(|step| step.title().to_owned())
+                        .map(|step| one_line(step.title()))
                         .unwrap_or_default(),
                     None,
                     theme.warning,
@@ -261,10 +261,10 @@ impl Dock {
                     let current = reply.current().filter(|_| !agents.is_thinking(chat.id()));
                     (
                         Spinner::new().xsmall().into_any_element(),
-                        current.map_or("Thinking".to_owned(), |step| step.title().to_owned()),
+                        current.map_or("Thinking".to_owned(), |step| one_line(step.title())),
                         current
                             .and_then(|step| step.target())
-                            .map(|target| relative(target, chat))
+                            .map(|target| one_line(&relative(target, chat)))
                             .unwrap_or_default(),
                         Some(now().saturating_sub(reply.started())),
                         theme.foreground,
@@ -296,7 +296,7 @@ impl Dock {
                         .text_color(theme.danger)
                         .into_any_element(),
                     "Failed".to_owned(),
-                    why.clone(),
+                    one_line(why),
                     None,
                     theme.danger,
                 ),
@@ -305,9 +305,12 @@ impl Dock {
             .gap_2()
             .min_w_0()
             .child(lead(lead_el))
+            // A step's title can be a whole command: it takes at most part of the line.
             .child(
                 div()
                     .flex_shrink_0()
+                    .max_w(gpui_kit::relative(0.6))
+                    .truncate()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(tint)
                     .child(verb),
@@ -849,17 +852,29 @@ fn dot(color: Hsla) -> impl IntoElement {
     div().size(px(6.)).rounded_full().bg(color)
 }
 
+// Text for a single line: lines joined, and cut where no line could show more.
+pub fn one_line(text: &str) -> String {
+    const MOST: usize = 200;
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= MOST {
+        return line;
+    }
+    let cut: String = line.chars().take(MOST).collect();
+    format!("{cut}…")
+}
+
 // The message in a line: its words, and how many images went with it.
 fn said(message: &Message) -> String {
+    let text = one_line(&message.text);
     let images = match message.images.len() {
-        0 => return message.text.clone(),
+        0 => return text,
         1 => "1 image".to_owned(),
         n => format!("{n} images"),
     };
-    if message.text.is_empty() {
+    if text.is_empty() {
         images
     } else {
-        format!("{} · {images}", message.text)
+        format!("{text} · {images}")
     }
 }
 
@@ -872,4 +887,22 @@ pub fn relative(target: &str, chat: &Chat) -> String {
     std::path::Path::new(target)
         .strip_prefix(chat.project())
         .map_or_else(|_| target.to_owned(), |path| path.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::one_line;
+
+    #[test]
+    fn a_command_on_many_lines_fits_one() {
+        let command = "python3 - <<'EOF'\n    s = open(p).read()\n\tprint(s)\nEOF";
+        assert_eq!(
+            one_line(command),
+            "python3 - <<'EOF' s = open(p).read() print(s) EOF"
+        );
+        let long = "x".repeat(500);
+        let cut = one_line(&long);
+        assert_eq!(cut.chars().count(), 201);
+        assert!(cut.ends_with('…'));
+    }
 }

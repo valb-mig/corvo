@@ -378,7 +378,13 @@ impl Chat {
             .nth(15)
             .map_or(0, |(ix, _)| ix);
         let lead = if start > 0 { "…" } else { "" };
-        let piece: String = text.get(start..)?.chars().take(80).collect();
+        // On one line: each break turns into a space, so the offset still points at the match.
+        let piece: String = text
+            .get(start..)?
+            .chars()
+            .take(80)
+            .map(|c| if c.is_whitespace() { ' ' } else { c })
+            .collect();
         let offset = lead.chars().count() + lower[start..at].chars().count();
         Some((format!("{lead}{piece}"), offset))
     }
