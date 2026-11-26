@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use corvo_domain::{Chat, End, Entry, Message, Part, Status, Step, StepKind, ago};
 use corvo_ui::agent::{AgentLogo, Sign, diff_lines, step_glyph};
+use corvo_ui::drawer::Drawer;
 use corvo_ui::field;
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -31,12 +32,11 @@ const OUTPUT: usize = 60;
 const IMAGE: f32 = 120.;
 // The lines a long message of the dev shows until it is unfolded.
 const FOLDED: usize = 8;
-// The width of the list of chats.
-const LIST: f32 = 232.;
 
-// The chats of the workspace in a window over the home: the list on the left and the picked
-// chat's conversation on the right, the agent bar over its foot. Its palette searches the chats
-// and starts a new one.
+// The chats of the workspace in a window over the home: the picked chat's conversation, the
+// agent bar over its foot, and the list of chats in a panel floating on its right, opened and
+// closed with ctrl-b or the button of the window's bar. Its palette searches the chats and
+// starts a new one.
 pub struct ChatWindow {
     agents: Entity<Agents>,
     project: Project,
@@ -49,6 +49,8 @@ pub struct ChatWindow {
     unfolded: HashSet<(u64, usize)>,
     scroll: ScrollHandle,
     shown: Option<u64>,
+    // The list of chats is open.
+    panel: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -79,6 +81,7 @@ impl ChatWindow {
             unfolded: HashSet::new(),
             scroll: ScrollHandle::new(),
             shown: None,
+            panel: false,
             _subs: subs,
         }
     }
@@ -87,6 +90,22 @@ impl ChatWindow {
     pub fn shown(&mut self, cx: &mut Context<Self>) {
         self.scroll.scroll_to_bottom();
         cx.notify();
+    }
+
+    pub fn has_panel(&self) -> bool {
+        self.panel
+    }
+
+    // Opens the list of chats, or closes it; tells whether it is open now.
+    pub fn toggle_panel(&mut self, cx: &mut Context<Self>) -> bool {
+        self.panel = !self.panel;
+        // Closed, a name being typed is kept, as when the field is left.
+        if !self.panel {
+            self.renamed(cx);
+            self.deleting = None;
+        }
+        cx.notify();
+        self.panel
     }
 
     fn at_bottom(&self) -> bool {
@@ -230,24 +249,17 @@ impl ChatWindow {
             }
         }
 
-        v_flex()
-            .w(px(LIST))
-            .h_full()
-            .flex_shrink_0()
-            .border_r_1()
-            .border_color(theme.border)
-            .bg(theme.sidebar)
-            .child(
-                div()
-                    .id("chat-list")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px_2()
-                    .pt_1()
-                    .pb_3()
-                    .children(rows),
-            )
+        Drawer::new("chat-panel").child(
+            div()
+                .id("chat-list")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .px_2()
+                .pt_1()
+                .pb_3()
+                .children(rows),
+        )
     }
 
     fn row(
@@ -472,9 +484,7 @@ impl ChatWindow {
         };
 
         v_flex()
-            .flex_1()
-            .min_w_0()
-            .h_full()
+            .size_full()
             .child(
                 h_flex()
                     .h(px(44.))
@@ -934,10 +944,12 @@ impl Render for ChatWindow {
             self.shown = active;
             self.scroll.scroll_to_bottom();
         }
-        h_flex()
+        let list = self.panel.then(|| self.list(cx));
+        div()
+            .relative()
             .size_full()
-            .child(self.list(cx))
             .child(self.conversation(cx))
+            .children(list)
     }
 }
 

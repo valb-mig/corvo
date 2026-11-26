@@ -13,7 +13,7 @@ actions!(
         ShowChat,
         OpenPalette,
         Dismiss,
-        ToggleTree
+        TogglePanel
     ]
 );
 
@@ -45,7 +45,7 @@ fn action(command: Command) -> Box<dyn Action> {
         Command::ShowChat => Box::new(ShowChat),
         Command::OpenPalette => Box::new(OpenPalette),
         Command::Dismiss => Box::new(Dismiss),
-        Command::ToggleTree => Box::new(ToggleTree),
+        Command::TogglePanel => Box::new(TogglePanel),
     }
 }
 

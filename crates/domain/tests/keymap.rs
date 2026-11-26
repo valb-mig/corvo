@@ -52,10 +52,10 @@ fn ctrl_k_opens_the_palette_from_anywhere() {
 }
 
 #[test]
-fn ctrl_b_toggles_the_tree_from_anywhere() {
+fn ctrl_b_toggles_the_panel_from_anywhere() {
     let keymap = Keymap::default();
     let toggle = keymap.bindings().iter().find(|b| b.chord() == "ctrl-b");
-    assert_eq!(toggle.map(Binding::command), Some(Command::ToggleTree));
+    assert_eq!(toggle.map(Binding::command), Some(Command::TogglePanel));
     assert_eq!(toggle.map(Binding::scope), Some(Scope::Global));
 }
 

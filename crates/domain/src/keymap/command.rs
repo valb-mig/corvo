@@ -15,6 +15,7 @@ pub enum Command {
     OpenPalette,
     // Puts the code away, back to the home.
     Dismiss,
-    // Hides the file tree beside the code, or brings it back.
-    ToggleTree,
+    // Opens the panel on the right of the window in front, or closes it: the file tree of the
+    // code, the list of chats, the changed files of the git window.
+    TogglePanel,
 }

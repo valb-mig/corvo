@@ -392,7 +392,8 @@ impl Code {
         }
     }
 
-    fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+    // The keys go to the editor of the active tab, when it has one.
+    pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((_, state)) = self.active(cx) {
             state.update(cx, |state, cx| state.focus(window, cx));
         }
@@ -474,6 +475,6 @@ fn empty(cx: &App) -> AnyElement {
         .justify_center()
         .text_sm()
         .text_color(cx.theme().muted_foreground)
-        .child("No files open. Pick one in the tree.")
+        .child("No files open. Pick one in the tree (Ctrl+B) or with Ctrl+K.")
         .into_any_element()
 }

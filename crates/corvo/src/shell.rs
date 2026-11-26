@@ -9,7 +9,8 @@ use corvo_domain::{Chats, Share, Status, Uuid, Workbench, Workspaces, agents, la
 use corvo_fs::{JsonChats, JsonOptions, LocalFs};
 use corvo_git::GitCli;
 use corvo_lsp::{Hub, Note};
-use corvo_ui::keys::{Dismiss, OpenPalette, Save, ShowChat, ShowCode, ShowGit, ToggleTree};
+use corvo_ui::drawer::Drawer;
+use corvo_ui::keys::{Dismiss, OpenPalette, Save, ShowChat, ShowCode, ShowGit, TogglePanel};
 use corvo_ui::language_icon::LanguageIcon;
 use corvo_ui::notice;
 use corvo_ui::statusbar::{Action, Popup, StatusBar};
@@ -21,7 +22,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, ElementId, Entity, FocusHandle,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, PathPromptOptions,
-    Render, Styled as _, Subscription, Window, div, prelude::FluentBuilder as _, px, relative,
+    Render, Styled as _, Subscription, Window, div, px, relative,
 };
 use lsp_types::Position;
 
@@ -78,8 +79,9 @@ pub struct Shell {
     paletting: bool,
     before: Option<FocusHandle>,
     index: HashMap<PathBuf, Rc<Vec<PathBuf>>>,
-    // The file tree beside the code, hidden with ctrl-b.
-    tree: bool,
+    // The panel floating on the right of the code, with the file tree over the active file's
+    // structure: opened and closed with ctrl-b or the button of the window's bar.
+    panel: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -254,7 +256,7 @@ impl Shell {
             paletting: false,
             before: None,
             index: HashMap::new(),
-            tree: true,
+            panel: false,
             _subs: subs,
         };
         let first = root.clone().or_else(|| shell.linked(cx).into_iter().next());
@@ -355,7 +357,8 @@ impl Shell {
         }
     }
 
-    // Brings the code over the home, with the tabs left open, or with none.
+    // Brings the code over the home, with the tabs left open, or with none and the file tree
+    // open to pick one.
     fn show_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.code.update(cx, |code, cx| code.show(window, cx));
         // With no tab, the structure has no file to follow.
@@ -365,6 +368,9 @@ impl Shell {
             .tabs()
             .active()
             .map(|doc| doc.path().to_path_buf());
+        if active.is_none() {
+            self.panel = true;
+        }
         self.structure.update(cx, |structure, cx| {
             structure.follow(active.as_deref(), window, cx)
         });
@@ -376,12 +382,47 @@ impl Shell {
         }
     }
 
-    fn on_toggle_tree(&mut self, _: &ToggleTree, _: &mut Window, cx: &mut Context<Self>) {
-        if self.code.read(cx).is_shown() {
-            self.tree = !self.tree;
-            cx.notify();
-        } else {
+    fn on_toggle_panel(&mut self, _: &TogglePanel, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.toggle_panel(window, cx) {
             cx.propagate();
+        }
+    }
+
+    // Opens the panel of the window in front, or closes it; with only the home, there is none.
+    // Closed, it hands the keys back to the window, should they have been in it.
+    fn toggle_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let keep = self.paletting;
+        if self.code.read(cx).is_shown() {
+            self.panel = !self.panel;
+            if !self.panel && !keep {
+                self.code.update(cx, |code, cx| code.focus(window, cx));
+            }
+        } else if self.chatting {
+            let open = self.chats.update(cx, |chats, cx| chats.toggle_panel(cx));
+            if !open && !keep {
+                self.dock.update(cx, |dock, cx| dock.focus(window, cx));
+            }
+        } else if self.gitting {
+            let open = self.git.update(cx, |git, cx| git.toggle_panel(cx));
+            if !open && !keep {
+                self.focus.focus(window, cx);
+            }
+        } else {
+            return false;
+        }
+        cx.notify();
+        true
+    }
+
+    // What the button of a window's panel does.
+    fn panel_button(&self, cx: &Context<Self>) -> impl Fn(&mut Window, &mut App) + 'static {
+        let shell = cx.entity().downgrade();
+        move |window, cx| {
+            shell
+                .update(cx, |shell, cx| {
+                    shell.toggle_panel(window, cx);
+                })
+                .ok();
         }
     }
 
@@ -741,10 +782,12 @@ impl Shell {
                     .update(cx, |structure, cx| structure.saved(path, window, cx));
                 self.repos.update(cx, |repos, cx| repos.refresh(cx));
             }
-            // The structure has no file left, and the keys go back to the window.
+            // The structure has no file left, the file tree opens to pick another, and the keys go
+            // back to the window.
             code::Event::Emptied => {
                 self.structure
                     .update(cx, |structure, cx| structure.follow(None, window, cx));
+                self.panel = true;
                 self.focus.focus(window, cx);
             }
             // The keys go back to the window, not to the editor gone.
@@ -788,41 +831,32 @@ impl Shell {
 }
 
 impl Shell {
-    // The code over the home: the tabs, and the sidebar on the right with the file tree over the
-    // active file's structure.
+    // The code over the home: the tabs, and the panel floating on their right with the file tree
+    // over the active file's structure.
     fn overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        // A file whose language has no outline leaves the tree the whole sidebar, and the tree
-        // hidden leaves it the structure; with neither, there is no sidebar.
-        let tree = self.tree;
-        let card = self.structure.read(cx).is_shown(cx).then(|| {
-            div()
-                .map(|el| {
-                    if tree {
-                        el.flex_shrink_0().h(relative(0.45))
-                    } else {
-                        el.flex_1().min_h_0()
-                    }
-                })
-                .p_2()
-                .child(self.structure.clone())
-        });
-        let files = tree.then(|| div().flex_1().min_h_0().child(self.files.clone()));
-        let side = (files.is_some() || card.is_some()).then(|| {
-            v_flex()
-                .w(px(280.))
-                .h_full()
-                .flex_shrink_0()
-                .border_l_1()
-                .border_color(cx.theme().border)
-                .bg(cx.theme().sidebar)
-                .children(files)
+        // A file whose language has no outline leaves the tree the whole panel.
+        let panel = self.panel.then(|| {
+            let card = self.structure.read(cx).is_shown(cx).then(|| {
+                div()
+                    .flex_shrink_0()
+                    .h(relative(0.45))
+                    .p_2()
+                    .child(self.structure.clone())
+            });
+            Drawer::new("code-panel")
+                .child(div().flex_1().min_h_0().child(self.files.clone()))
                 .children(card)
         });
-        let body = h_flex()
+        let body = div()
+            .relative()
             .size_full()
-            .child(div().flex_1().min_w_0().h_full().child(self.code.clone()))
-            .children(side);
-        let bar = WindowBar::new(Glyph::Code, "Code");
+            .child(self.code.clone())
+            .children(panel);
+        let bar = WindowBar::new(Glyph::Code, "Code").panel(
+            self.panel,
+            "Files (Ctrl+B)",
+            self.panel_button(cx),
+        );
         let offers = self.paletting.then(|| {
             let query = self.palette.read(cx).query(cx).to_string();
             let files = self
@@ -841,7 +875,13 @@ impl Shell {
     // The chat window over the home; the agent bar stays over its foot.
     fn chat_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let subtitle = self.chats.read(cx).subtitle(cx);
-        let bar = WindowBar::new(Glyph::MessageSquare, "Chat").subtitle(subtitle);
+        let bar = WindowBar::new(Glyph::MessageSquare, "Chat")
+            .subtitle(subtitle)
+            .panel(
+                self.chats.read(cx).has_panel(),
+                "Chats (Ctrl+B)",
+                self.panel_button(cx),
+            );
         let body = self.chats.clone().into_any_element();
         let offers = self.paletting.then(|| {
             let query = self.palette.read(cx).query(cx).to_string();
@@ -852,7 +892,11 @@ impl Shell {
     }
 
     fn git_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let bar = WindowBar::new(Glyph::GitBranch, "Git");
+        let bar = WindowBar::new(Glyph::GitBranch, "Git").panel(
+            self.git.read(cx).has_panel(),
+            "Changes (Ctrl+B)",
+            self.panel_button(cx),
+        );
         let body = self.git.clone().into_any_element();
         let offers = self.paletting.then(|| {
             let query = self.palette.read(cx).query(cx).to_string();
@@ -1130,7 +1174,7 @@ impl Render for Shell {
             .on_action(cx.listener(Self::on_show_git))
             .on_action(cx.listener(Self::on_show_chat))
             .on_action(cx.listener(Self::on_open_palette))
-            .on_action(cx.listener(Self::on_toggle_tree))
+            .on_action(cx.listener(Self::on_toggle_panel))
             .on_action(cx.listener(Self::on_dismiss))
             .size_full()
             .child(

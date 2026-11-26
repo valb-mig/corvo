@@ -40,7 +40,7 @@ impl Default for Keymap {
             Binding::new("ctrl-shift-c", Command::ShowChat, Scope::Global),
             Binding::new("ctrl-k", Command::OpenPalette, Scope::Global),
             Binding::new("escape", Command::Dismiss, Scope::Global),
-            Binding::new("ctrl-b", Command::ToggleTree, Scope::Global),
+            Binding::new("ctrl-b", Command::TogglePanel, Scope::Global),
         ])
     }
 }

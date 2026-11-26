@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use corvo_domain::{Change, Changed, Repo};
+use corvo_ui::drawer::{self, Drawer};
 use corvo_ui::file_icon::FileIcon;
 use corvo_ui::git::tint;
 use gpui_kit::assets::IconName as Glyph;
@@ -21,12 +22,10 @@ pub enum Event {
     Open(PathBuf),
 }
 
-// The width of the list of changed files.
-const LIST: f32 = 280.;
-
-// The git window: on the left the changed files of each repository, under it; on the right the
-// patch of the file picked, from the last commit to the file on disk. It takes turns with the
-// code and the chats over the home.
+// The git window: the patch of the file picked, from the last commit to the file on disk, and in
+// a panel floating on its right the changed files of each repository, under it, opened and
+// closed with ctrl-b or the button of the window's bar. It takes turns with the code and the
+// chats over the home.
 pub struct GitWindow {
     repos: Entity<Repos>,
     picked: Option<PathBuf>,
@@ -38,6 +37,8 @@ pub struct GitWindow {
     shown: Option<(PathBuf, String)>,
     // The read of the patch under way; a newer one drops it.
     _reading: Option<Task<()>>,
+    // The list of changed files is open.
+    panel: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -55,6 +56,7 @@ impl GitWindow {
             trouble: None,
             shown: None,
             _reading: None,
+            panel: false,
             _subs: subs,
         };
         window.reread(cx);
@@ -77,6 +79,17 @@ impl GitWindow {
                 .map(|changed| changed.path.clone());
         }
         self.read(cx);
+    }
+
+    pub fn has_panel(&self) -> bool {
+        self.panel
+    }
+
+    // Opens the list of changed files, or closes it; tells whether it is open now.
+    pub fn toggle_panel(&mut self, cx: &mut Context<Self>) -> bool {
+        self.panel = !self.panel;
+        cx.notify();
+        self.panel
     }
 
     pub fn pick(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -285,6 +298,8 @@ impl GitWindow {
             .flex_shrink_0()
             .border_b_1()
             .border_color(theme.border)
+            // Open stays out from under the list.
+            .when(self.panel, |head| head.pr(drawer::room()))
             .child(
                 div()
                     .flex_1()
@@ -323,21 +338,23 @@ impl GitWindow {
 
 impl Render for GitWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let list = div()
-            .id("git-list")
-            .w(px(LIST))
-            .h_full()
-            .flex_shrink_0()
-            .overflow_y_scroll()
-            .py_3()
-            .px_1()
-            .border_r_1()
-            .border_color(theme.border)
-            .bg(theme.sidebar)
-            .child(self.list(cx));
-        let patch = div().flex_1().min_w_0().h_full().child(self.patch(cx));
-        h_flex().size_full().child(list).child(patch)
+        let list = self.panel.then(|| {
+            Drawer::new("git-panel").child(
+                div()
+                    .id("git-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .py_3()
+                    .px_1()
+                    .child(self.list(cx)),
+            )
+        });
+        div()
+            .relative()
+            .size_full()
+            .child(self.patch(cx))
+            .children(list)
     }
 }
 
