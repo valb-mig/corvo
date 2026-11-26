@@ -42,7 +42,7 @@ pub use languages::{Share, language, languages};
 pub use node::{Kind, Node};
 pub use pile::{CROWD, Column, FEW, Item, Pile, column};
 pub use scripts::{Script, scripts};
-pub use symbol::{Kind as SymbolKind, Symbol};
+pub use symbol::{Kind as SymbolKind, Symbol, gather_impls, path_to};
 pub use tabs::Tabs;
 pub use tree::Tree;
 pub use uuid::Uuid;
