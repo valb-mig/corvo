@@ -11,7 +11,7 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, ElementId, Entity, EventEmitter, FontWeight,
+    AnyElement, App, AppContext as _, Context, ElementId, Entity, FontWeight,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window, div,
     prelude::*, px, relative,
@@ -19,10 +19,6 @@ use gpui_kit::{
 
 use crate::agents::{Agents, now};
 use crate::pane::dock::{Project, clock, relative as from_project};
-
-pub enum Event {
-    Close,
-}
 
 const OUTPUT: usize = 60;
 // The width of the list of chats.
@@ -44,7 +40,6 @@ pub struct ChatWindow {
     _subs: Vec<Subscription>,
 }
 
-impl EventEmitter<Event> for ChatWindow {}
 
 impl ChatWindow {
     pub fn new(
@@ -537,7 +532,6 @@ impl ChatWindow {
                 .into_any_element(),
         };
 
-        let close = cx.entity().downgrade();
         v_flex()
             .flex_1()
             .min_w_0()
@@ -564,26 +558,6 @@ impl ChatWindow {
                             .text_xs()
                             .text_color(theme.muted_foreground)
                             .child(sub.join(" · ")),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .px_1()
-                            .rounded(px(4.))
-                            .border_1()
-                            .border_color(theme.border)
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("Esc"),
-                    )
-                    .child(
-                        Button::new("close-chat")
-                            .ghost()
-                            .small()
-                            .icon(Glyph::Close)
-                            .on_click(move |_, _, cx| {
-                                close.update(cx, |_, cx| cx.emit(Event::Close)).ok();
-                            }),
                     ),
             )
             .child(

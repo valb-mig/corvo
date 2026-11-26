@@ -18,3 +18,4 @@ pub mod theme;
 pub mod titlebar;
 pub mod tree;
 pub mod viewer;
+pub mod window_bar;

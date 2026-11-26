@@ -13,18 +13,19 @@ use corvo_ui::keys::{Dismiss, Save, ShowChat, ShowCode, ShowGit, ToggleTree};
 use corvo_ui::language_icon::LanguageIcon;
 use corvo_ui::notice;
 use corvo_ui::statusbar::{Action, Popup, StatusBar};
+use corvo_ui::window_bar::WindowBar;
 use futures::StreamExt as _;
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement as _, PathPromptOptions, Render, Styled as _, Subscription, Window,
-    div, prelude::FluentBuilder as _, px, relative,
+    AnyElement, App, AppContext as _, Context, ElementId, Entity, FocusHandle,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, PathPromptOptions,
+    Render, Styled as _, Subscription, Window, div, prelude::FluentBuilder as _, px, relative,
 };
 use lsp_types::Position;
 
 use crate::agents::{self, Agents};
-use crate::pane::chats::{self, ChatWindow};
+use crate::pane::chats::ChatWindow;
 use crate::pane::code::{self, Code};
 use crate::pane::dock::{self, Dock, Project};
 use crate::pane::files::{self, Files};
@@ -143,7 +144,6 @@ impl Shell {
         let subs = vec![
             cx.subscribe_in(&agents, window, Self::on_agents),
             cx.subscribe_in(&dock, window, Self::on_dock),
-            cx.subscribe_in(&chats, window, Self::on_chats),
             cx.subscribe_in(&files, window, Self::on_files),
             cx.subscribe_in(&structure, window, Self::on_structure),
             cx.subscribe_in(&code, window, Self::on_code),
@@ -418,7 +418,6 @@ impl Shell {
                 self.gitting = false;
                 self.code.update(cx, |code, cx| code.open(path, window, cx));
             }
-            git::Event::Close => self.close_git(window, cx),
         }
     }
 
@@ -482,18 +481,6 @@ impl Shell {
     ) {
         match event {
             dock::Event::Chat => self.toggle_chat(window, cx),
-        }
-    }
-
-    fn on_chats(
-        &mut self,
-        _: &Entity<ChatWindow>,
-        event: &chats::Event,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            chats::Event::Close => self.close_chat(window, cx),
         }
     }
 
@@ -682,9 +669,8 @@ impl Shell {
 }
 
 impl Shell {
-    // The code over the home, which steps back behind a dimmed layer: the tabs, and the sidebar
-    // on the right with the file tree over the active file's structure. A click on the dimmed home
-    // puts it away.
+    // The code over the home: the tabs, and the sidebar on the right with the file tree over the
+    // active file's structure.
     fn overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // A file whose language has no outline leaves the tree the whole sidebar, and the tree
         // hidden leaves it the structure; with neither, there is no sidebar.
@@ -713,90 +699,41 @@ impl Shell {
                 .children(files)
                 .children(card)
         });
-        let theme = cx.theme();
-        let shell = cx.entity().downgrade();
-        let scrim = div()
-            .id("scrim")
-            .absolute()
-            .top_0()
-            .left_0()
+        let body = h_flex()
             .size_full()
-            .occlude()
-            .bg(theme.background.opacity(0.75))
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                shell.update(cx, |shell, cx| shell.dismiss(window, cx)).ok();
-            });
-        let panel = h_flex()
-            .id("code")
-            .absolute()
-            .top(px(32.))
-            .bottom(px(32.))
-            .left(px(48.))
-            .right(px(48.))
-            .occlude()
-            .overflow_hidden()
-            .rounded_lg()
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.background)
             .child(div().flex_1().min_w_0().h_full().child(self.code.clone()))
             .children(side);
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .child(scrim)
-            .child(panel)
+        let bar = WindowBar::new(Glyph::Code, "Code");
+        self.window("code", bar, body.into_any_element(), Self::dismiss, cx)
     }
 
-    // The chat window over the home, as the code comes: the home dimmed behind, a click on it
-    // puts the window away. The agent bar stays over its foot.
+    // The chat window over the home; the agent bar stays over its foot.
     fn chat_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = cx.theme();
-        let shell = cx.entity().downgrade();
-        let scrim = div()
-            .id("chat-scrim")
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .occlude()
-            .bg(theme.background.opacity(0.75))
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                shell
-                    .update(cx, |shell, cx| shell.close_chat(window, cx))
-                    .ok();
-            });
-        let panel = div()
-            .id("chats")
-            .absolute()
-            .top(px(32.))
-            .bottom(px(32.))
-            .left(px(48.))
-            .right(px(48.))
-            .occlude()
-            .overflow_hidden()
-            .rounded_lg()
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .child(self.chats.clone());
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .child(scrim)
-            .child(panel)
+        let bar = WindowBar::new(Glyph::MessageSquare, "Chat");
+        let body = self.chats.clone().into_any_element();
+        self.window("chats", bar, body, Self::close_chat, cx)
     }
 
-    // The git window over the home, as the chat window comes.
     fn git_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let bar = WindowBar::new(Glyph::GitBranch, "Git");
+        let body = self.git.clone().into_any_element();
+        self.window("git", bar, body, Self::close_git, cx)
+    }
+
+    // A window over the home, which steps back behind a dimmed layer: its bar along the top and
+    // what it holds under it. Esc, the bar's × or a click on the dimmed home puts it away.
+    fn window(
+        &self,
+        id: &'static str,
+        bar: WindowBar,
+        body: AnyElement,
+        close: fn(&mut Self, &mut Window, &mut Context<Self>),
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = cx.theme();
-        let shell = cx.entity().downgrade();
+        let (dimmed, closer) = (cx.entity().downgrade(), cx.entity().downgrade());
         let scrim = div()
-            .id("git-scrim")
+            .id(ElementId::Name(format!("{id}-scrim").into()))
             .absolute()
             .top_0()
             .left_0()
@@ -804,12 +741,17 @@ impl Shell {
             .occlude()
             .bg(theme.background.opacity(0.75))
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                shell
-                    .update(cx, |shell, cx| shell.close_git(window, cx))
+                dimmed
+                    .update(cx, |shell, cx| close(shell, window, cx))
                     .ok();
             });
-        let panel = div()
-            .id("git")
+        let bar = bar.on_close(move |window, cx| {
+            closer
+                .update(cx, |shell, cx| close(shell, window, cx))
+                .ok();
+        });
+        let panel = v_flex()
+            .id(id)
             .absolute()
             .top(px(32.))
             .bottom(px(32.))
@@ -821,7 +763,8 @@ impl Shell {
             .border_1()
             .border_color(theme.border)
             .bg(theme.background)
-            .child(self.git.clone());
+            .child(bar)
+            .child(div().flex_1().min_h_0().child(body));
         div()
             .absolute()
             .top_0()

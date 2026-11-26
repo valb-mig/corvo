@@ -19,7 +19,6 @@ use crate::repos::Repos;
 pub enum Event {
     // Asked to open a changed file in the code.
     Open(PathBuf),
-    Close,
 }
 
 // The width of the list of changed files.
@@ -302,36 +301,6 @@ impl GitWindow {
 impl Render for GitWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let close = cx.entity().downgrade();
-        let head = h_flex()
-            .h(px(44.))
-            .px_3()
-            .gap_2()
-            .flex_shrink_0()
-            .border_b_1()
-            .border_color(theme.border)
-            .child(Icon::new(Glyph::GitBranch).small())
-            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("Git"))
-            .child(div().flex_1())
-            .child(
-                div()
-                    .px_1()
-                    .rounded(px(4.))
-                    .border_1()
-                    .border_color(theme.border)
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("Esc"),
-            )
-            .child(
-                Button::new("close-git")
-                    .ghost()
-                    .small()
-                    .icon(Glyph::Close)
-                    .on_click(move |_, _, cx| {
-                        close.update(cx, |_, cx| cx.emit(Event::Close)).ok();
-                    }),
-            );
         let list = div()
             .id("git-list")
             .w(px(LIST))
@@ -345,10 +314,7 @@ impl Render for GitWindow {
             .bg(theme.sidebar)
             .child(self.list(cx));
         let patch = div().flex_1().min_w_0().h_full().child(self.patch(cx));
-        v_flex()
-            .size_full()
-            .child(head)
-            .child(h_flex().flex_1().min_h_0().child(list).child(patch))
+        h_flex().size_full().child(list).child(patch)
     }
 }
 

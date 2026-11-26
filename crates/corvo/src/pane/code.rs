@@ -5,9 +5,8 @@ use std::time::Duration;
 
 use corvo_domain::{Change, Content, Doc, Hunk, HunkMark, Lang, Workbench, hunks};
 use corvo_lsp::Hub;
-use corvo_ui::button::Button;
 use corvo_ui::{editor, notice, tab, viewer};
-use gpui_kit::component::{ActiveTheme as _, IconName, h_flex};
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, IntoElement,
     ParentElement as _, Render, Styled as _, Subscription, Task, Window, div,
@@ -440,31 +439,20 @@ impl Render for Code {
 
         let pick = cx.entity().downgrade();
         let close = pick.clone();
-        let dismiss = pick.clone();
 
         div()
             .flex()
             .flex_col()
             .size_full()
             .child(
-                h_flex()
-                    .child(
-                        div().flex_1().min_w_0().child(
-                            tab::Bar::new("tabs", items)
-                                .active(active)
-                                .on_pick(move |ix, window, cx| {
-                                    pick.update(cx, |this, cx| this.pick(ix, window, cx)).ok();
-                                })
-                                .on_close(move |ix, window, cx| {
-                                    close.update(cx, |this, cx| this.close(ix, window, cx)).ok();
-                                }),
-                        ),
-                    )
-                    .child(Button::ghost("dismiss").icon(IconName::Close).on_click(
-                        move |_, window, cx| {
-                            dismiss.update(cx, |this, cx| this.dismiss(window, cx)).ok();
-                        },
-                    )),
+                tab::Bar::new("tabs", items)
+                    .active(active)
+                    .on_pick(move |ix, window, cx| {
+                        pick.update(cx, |this, cx| this.pick(ix, window, cx)).ok();
+                    })
+                    .on_close(move |ix, window, cx| {
+                        close.update(cx, |this, cx| this.close(ix, window, cx)).ok();
+                    }),
             )
             .child(div().flex_1().min_h_0().children(body))
     }
