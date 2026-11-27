@@ -137,6 +137,11 @@ impl Workbench {
         self.tabs.touch(path);
     }
 
+    // The tab's text is back to what is on disk.
+    pub fn clean(&mut self, path: &Path) {
+        self.tabs.clean(path);
+    }
+
     pub fn save(&mut self, path: &Path, text: &str) -> io::Result<()> {
         self.fs.write(path, text)?;
         self.tabs.clean(path);

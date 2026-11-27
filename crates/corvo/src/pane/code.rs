@@ -72,6 +72,9 @@ pub struct Code {
     shown: bool,
     views: HashMap<PathBuf, View>,
     texts: HashMap<PathBuf, editor::Rope>,
+    // Each file's text as last read from or written to disk: its tab is dirty while the editor's
+    // differs from it.
+    saved: HashMap<PathBuf, editor::Rope>,
     subs: HashMap<PathBuf, Vec<Subscription>>,
     marked: HashMap<PathBuf, Marked>,
     // The line each file's cursor was last seen on.
@@ -103,6 +106,7 @@ impl Code {
             shown: false,
             views: HashMap::new(),
             texts: HashMap::new(),
+            saved: HashMap::new(),
             subs: HashMap::new(),
             marked: HashMap::new(),
             lines: HashMap::new(),
@@ -136,6 +140,8 @@ impl Code {
         let text = state.read(cx).value();
         match self.bench.update(cx, |bench, _| bench.save(&path, &text)) {
             Ok(()) => {
+                self.saved
+                    .insert(path.clone(), state.read(cx).text().clone());
                 self.hub.read(cx).save(&path);
                 cx.emit(Event::Saved(path));
             }
@@ -309,9 +315,9 @@ impl Code {
             .update(cx, |hub, _| hub.open(path, lang, &rope.to_string()));
 
         let key = path.to_path_buf();
-        let touch = cx.subscribe(&state, move |this, _, event: &editor::Event, cx| {
+        let touch = cx.subscribe(&state, move |this, state, event: &editor::Event, cx| {
             if matches!(event, editor::Event::Change) {
-                this.touch(&key, cx);
+                this.touch(&key, &state, cx);
                 this.remark_soon(&key, cx);
             }
         });
@@ -334,6 +340,7 @@ impl Code {
             }
         });
 
+        self.saved.insert(path.to_path_buf(), rope.clone());
         self.texts.insert(path.to_path_buf(), rope);
         self.subs
             .insert(path.to_path_buf(), vec![touch, sync, follow]);
@@ -354,17 +361,25 @@ impl Code {
             .update(cx, |hub, _| hub.change(path, changes, || last.to_string()));
     }
 
-    fn touch(&mut self, path: &Path, cx: &mut Context<Self>) {
+    // The text changed: the tab is dirty unless it is back to what is on disk, as after undoing
+    // every edit since the last save.
+    fn touch(&mut self, path: &Path, state: &Entity<editor::State>, cx: &mut Context<Self>) {
+        let same = self
+            .saved
+            .get(path)
+            .is_some_and(|saved| saved == state.read(cx).text());
         let dirty = self
             .bench
             .read(cx)
             .tabs()
             .get(path)
             .is_some_and(Doc::is_dirty);
-        if !dirty {
-            self.bench.update(cx, |bench, _| bench.touch(path));
-            cx.notify();
+        match (same, dirty) {
+            (false, false) => self.bench.update(cx, |bench, _| bench.touch(path)),
+            (true, true) => self.bench.update(cx, |bench, _| bench.clean(path)),
+            _ => return,
         }
+        cx.notify();
     }
 
     fn pick(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -705,6 +720,8 @@ impl Code {
             return;
         }
         for (old, new) in moves {
+            // What is on disk went along: the tab stays as dirty as it was.
+            let saved = self.saved.get(old).cloned();
             let Some(view) = self.drop_view(old, cx) else {
                 continue;
             };
@@ -715,6 +732,9 @@ impl Code {
                         (state.value().to_string(), state.cursor_position())
                     };
                     let state = self.edit(new, text, window, cx);
+                    if let Some(saved) = saved {
+                        self.saved.insert(new.clone(), saved);
+                    }
                     state.update(cx, |state, cx| state.set_cursor_position(at, window, cx));
                     self.views.insert(new.clone(), View::Text(state));
                     self.rebase(new, cx);
@@ -735,6 +755,7 @@ impl Code {
     fn drop_view(&mut self, path: &Path, cx: &mut Context<Self>) -> Option<View> {
         self.hub.update(cx, |hub, _| hub.close(path));
         self.texts.remove(path);
+        self.saved.remove(path);
         self.subs.remove(path);
         self.marked.remove(path);
         self.lines.remove(path);
