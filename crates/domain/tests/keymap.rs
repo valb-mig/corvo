@@ -127,3 +127,18 @@ fn f2_and_delete_act_on_the_row_picked_in_the_file_tree() {
     assert_eq!(in_tree("f2"), Some(Command::RenamePicked));
     assert_eq!(in_tree("delete"), Some(Command::RemovePicked));
 }
+
+#[test]
+fn alt_and_a_number_show_a_screen_of_the_git_window() {
+    let keymap = Keymap::default();
+    let screen = |chord: &str| {
+        keymap
+            .bindings()
+            .iter()
+            .find(|b| b.chord() == chord)
+            .map(Binding::command)
+    };
+    assert_eq!(screen("alt-1"), Some(Command::GitChanges));
+    assert_eq!(screen("alt-6"), Some(Command::GitConflicts));
+    assert_eq!(screen("alt-down"), Some(Command::GitNextRepo));
+}
