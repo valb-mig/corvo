@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::port::{Depth, Fs, Syntax};
 use crate::{
     Arrangement, Atlas, Content, Finder, Kind, Lang, Mark, Mention, Moved, Node, Place, Symbol,
-    Tabs, Tree, excerpt,
+    Tabs, Tree, excerpt, owner,
 };
 
 // A file or folder under its new name, and the tabs that followed it, each from its path before
@@ -366,6 +366,47 @@ impl Workbench {
         }
         self.atlas.isolate(root);
         Ok(())
+    }
+
+    // Brings a file into sight on the home: its project stands alone, unless the one standing
+    // alone already holds it; the folders down to it open; the folder it is in shows all its
+    // files, out of their piles; and what hid it, or a folder above it, shows again. Says whether
+    // the file is in one of the projects charted.
+    pub fn show_on_home(&mut self, path: &Path) -> io::Result<bool> {
+        let projects = self.atlas.projects().to_vec();
+        let Some(project) = owner(path, &projects).map(Path::to_path_buf) else {
+            return Ok(false);
+        };
+        let held = self.atlas.root().is_some_and(|root| path.starts_with(root));
+        if !held {
+            self.isolate(Some(&project))?;
+        }
+        let root = self.atlas.root().map(Path::to_path_buf).unwrap_or(project);
+        let mut dirs: Vec<PathBuf> = path
+            .ancestors()
+            .skip(1)
+            .take_while(|dir| dir.starts_with(&root) && *dir != root)
+            .map(Path::to_path_buf)
+            .collect();
+        dirs.reverse();
+        for dir in dirs {
+            self.survey(&dir)?;
+            if !self.atlas.is_open(&dir) {
+                self.atlas.open(Node::dir(dir));
+            }
+        }
+        if let Some(dir) = path.parent() {
+            self.list(dir)?;
+            self.atlas.spread(dir);
+        }
+        for place in path
+            .ancestors()
+            .take_while(|at| at.starts_with(&root))
+            .map(|at| Place::Node(at.to_path_buf()))
+        {
+            self.atlas.show(&place);
+        }
+        Ok(true)
     }
 
     // Opens a folder or file of the atlas, or closes it with everything open inside.

@@ -759,3 +759,35 @@ fn replace_writes_only_a_file_where_it_found_something() {
 
     assert_eq!(fs.files.borrow()[main], "fn start() {}");
 }
+
+#[test]
+fn showing_a_file_on_the_home_stands_its_project_alone_and_opens_down_to_it() {
+    let mut bench = bench(project());
+    bench
+        .chart(&[PathBuf::from("/p"), PathBuf::from("/q")])
+        .unwrap();
+    bench.isolate(Some(Path::new("/q"))).unwrap();
+    bench.hide(Place::Node(PathBuf::from("/p/src")), "src");
+
+    assert!(bench.show_on_home(Path::new("/p/src/lib.rs")).unwrap());
+
+    let atlas = bench.atlas();
+    assert_eq!(atlas.root(), Some(Path::new("/p")));
+    assert!(atlas.is_open(Path::new("/p/src")));
+    assert!(atlas.is_spread(Path::new("/p/src")));
+    assert!(!atlas.is_hidden(&Place::Node(PathBuf::from("/p/src"))));
+}
+
+#[test]
+fn showing_a_file_keeps_the_project_standing_alone_when_it_holds_it() {
+    let mut bench = bench(project());
+    bench.chart(&[PathBuf::from("/p")]).unwrap();
+    bench.isolate(Some(Path::new("/p"))).unwrap();
+    let src = Node::dir("/p/src");
+    bench.toggle(&src).unwrap();
+
+    assert!(bench.show_on_home(Path::new("/p/main.rs")).unwrap());
+    // Nothing was closed on the way: what was open stays.
+    assert!(bench.atlas().is_open(src.path()));
+    assert!(!bench.show_on_home(Path::new("/elsewhere/x.rs")).unwrap());
+}
