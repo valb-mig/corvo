@@ -177,7 +177,7 @@ impl Git for GitCli {
             }
             let mut seen = HashSet::new();
             found.retain(|commit| seen.insert(commit.hash.clone()));
-            found.sort_by(|a, b| b.when.cmp(&a.when));
+            found.sort_by_key(|commit| std::cmp::Reverse(commit.when));
             found
         };
         Ok(commits.into_iter().skip(log.skip).take(log.limit).collect())

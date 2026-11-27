@@ -213,9 +213,8 @@ impl GitWindow {
     fn repos_moved(&mut self, cx: &mut Context<Self>) {
         let before = self.root.clone();
         self.settle(cx);
-        if self.root != before {
-            self.load(self.tab, cx);
-        } else if self.tab == Tab::Changes || self.tab == Tab::Conflicts {
+        // The changes and the conflicts follow what git read; the others are read when shown.
+        if self.root != before || matches!(self.tab, Tab::Changes | Tab::Conflicts) {
             self.load(self.tab, cx);
         }
         cx.notify();

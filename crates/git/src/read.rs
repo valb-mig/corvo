@@ -326,8 +326,8 @@ mod tests {
     #[test]
     fn reads_commits_with_their_parents_and_names() {
         let out = format!(
-            "aaa\0bbb ccc\0Dev\0dev@x\01700000000\0HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1\0merge it{END}\n\
-             bbb\0\0Dev\0dev@x\01690000000\0\0first{END}\n"
+            "aaa\0bbb ccc\0Dev\0dev@x\x001700000000\0HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1\0merge it{END}\n\
+             bbb\0\0Dev\0dev@x\x001690000000\0\0first{END}\n"
         );
         let commits = commits(&out, Some("main"));
         assert_eq!(commits.len(), 2);
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn reads_the_files_a_range_touched() {
-        let numstat = "3\t1\ta.rs\0-\t-\timg.png\00\t0\t\0old.rs\0new.rs\0";
+        let numstat = "3\t1\ta.rs\0-\t-\timg.png\x000\t0\t\0old.rs\0new.rs\0";
         let status = "M\0a.rs\0A\0img.png\0R100\0old.rs\0new.rs\0";
         let files = files(numstat, status);
         assert_eq!(files.len(), 3);
@@ -364,11 +364,11 @@ mod tests {
     #[test]
     fn reads_branches_tags_and_how_they_track() {
         let out = [
-            "refs/heads/main\0aaa\0\0*\0origin/main\0ahead 7, behind 2\0/w/corvo\01700\0last one",
-            "refs/heads/old\0bbb\0\0 \0origin/old\0gone\0\01600\0gone one",
-            "refs/remotes/origin/main\0ccc\0\0 \0\0\0\01650\0remote one",
-            "refs/remotes/origin/HEAD\0ccc\0\0 \0\0\0\01650\0remote one",
-            "refs/tags/v1\0tagobj\0ddd\0 \0\0\0\01500\0release",
+            "refs/heads/main\0aaa\0\0*\0origin/main\0ahead 7, behind 2\0/w/corvo\x001700\0last one",
+            "refs/heads/old\0bbb\0\0 \0origin/old\0gone\0\x001600\0gone one",
+            "refs/remotes/origin/main\0ccc\0\0 \0\0\0\x001650\0remote one",
+            "refs/remotes/origin/HEAD\0ccc\0\0 \0\0\0\x001650\0remote one",
+            "refs/tags/v1\0tagobj\0ddd\0 \0\0\0\x001500\0release",
         ]
         .join("\n");
         let (local, remote, tags) = refs(&out);
@@ -384,8 +384,8 @@ mod tests {
 
     #[test]
     fn reads_stashes_with_their_branch_and_message() {
-        let out = "stash@{0}\0aaa\01700\0On main: half of it\n\
-                   stash@{1}\0bbb\01600\0WIP on fix/x: 2e49ded subject\n";
+        let out = "stash@{0}\0aaa\x001700\0On main: half of it\n\
+                   stash@{1}\0bbb\x001600\0WIP on fix/x: 2e49ded subject\n";
         let stashes = stashes(out);
         assert_eq!(stashes[0].index, 0);
         assert_eq!(
