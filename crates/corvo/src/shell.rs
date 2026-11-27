@@ -13,7 +13,9 @@ use corvo_git::GitCli;
 use corvo_lsp::{Hub, Note};
 use corvo_ui::drawer::{self, Drawer};
 use corvo_ui::keys::{
-    Dismiss, FindInFiles, OpenPalette, Save, ShowChat, ShowCode, ShowGit, ShowTerminal, TogglePanel,
+    Dismiss, FindInFiles, GitBranches, GitChanges, GitConflicts, GitHistory, GitNextRepo,
+    GitPreviousRepo, GitStash, GitWorktrees, OpenPalette, Save, ShowChat, ShowCode, ShowGit,
+    ShowTerminal, TogglePanel,
 };
 use corvo_ui::language_icon::LanguageIcon;
 use corvo_ui::statusbar::{Action, Popup, StatusBar};
@@ -37,7 +39,7 @@ use crate::pane::code::{self, Code};
 use crate::pane::dock::{self, Dock, Project};
 use crate::pane::files::{self, Files};
 use crate::pane::finds::{self, Finds};
-use crate::pane::git::{self, GitWindow};
+use crate::pane::git::{self, GitWindow, Tab as GitTab};
 use crate::pane::hidden::Hidden;
 use crate::pane::overview::{self, Overview};
 use crate::pane::scripts::{self, Scripts};
@@ -138,7 +140,7 @@ impl Shell {
             cx.new(|cx| Code::new(bench.clone(), hub.clone(), home.clone(), repos.clone(), cx));
         let files = cx.new(|cx| Files::new(bench.clone(), repos.clone(), window, cx));
         let finds = cx.new(|cx| Finds::new(bench.clone(), code.clone(), window, cx));
-        let git = cx.new(|cx| GitWindow::new(repos.clone(), cx));
+        let git = cx.new(|cx| GitWindow::new(repos.clone(), window, cx));
         let hidden = cx.new(|_| Hidden::new(bench.clone(), home.clone()));
         let stack = cx.new(|_| Stack::default());
 
@@ -146,6 +148,7 @@ impl Shell {
         let (agent_hub, mut agent_events) = corvo_agent::Hub::new(agents());
         let store = Box::new(option_store());
         let agents = cx.new(|_| Agents::new(agent_hub, chat_list, store));
+        git.update(cx, |git, cx| git.set_agents(agents.clone(), cx));
         let project = focused(bench.clone(), spaces.clone(), id);
         let name = spaces
             .read(cx)
@@ -789,6 +792,24 @@ impl Shell {
         }
     }
 
+    // Alt and a number show a screen of the git window, while it is in front.
+    fn git_tab(&mut self, tab: GitTab, cx: &mut Context<Self>) {
+        if !self.gitting {
+            cx.propagate();
+            return;
+        }
+        self.git.update(cx, |git, cx| git.show_tab(tab, cx));
+    }
+
+    // Alt and an arrow show the repository above or below, while the git window is in front.
+    fn git_repo(&mut self, down: bool, cx: &mut Context<Self>) {
+        if !self.gitting {
+            cx.propagate();
+            return;
+        }
+        self.git.update(cx, |git, cx| git.step_repo(down, cx));
+    }
+
     fn close_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.gitting = false;
         self.paletting = false;
@@ -823,6 +844,39 @@ impl Shell {
             git::Event::Open(path) => {
                 self.gitting = false;
                 self.code.update(cx, |code, cx| code.open(path, window, cx));
+            }
+            git::Event::Ask { project, prompt } => {
+                let (project, prompt) = (project.clone(), prompt.clone());
+                self.agents.update(cx, |agents, cx| {
+                    // A chat of another folder is left as it is: the question goes to a new one.
+                    // With nothing to ask, the chat only opens there, for the dev to write.
+                    if prompt.is_empty()
+                        || agents.active().is_none_or(|chat| chat.project() != project)
+                    {
+                        agents.new_chat(&project, cx);
+                    }
+                    if prompt.is_empty() {
+                        agents.open(&project, cx);
+                    } else {
+                        agents.send(&prompt, &[], &project, cx);
+                    }
+                });
+                if !self.chatting {
+                    self.toggle_chat(window, cx);
+                }
+            }
+            git::Event::Chat(id) => {
+                let id = *id;
+                self.agents.update(cx, |agents, cx| agents.pick(id, cx));
+                if !self.chatting {
+                    self.toggle_chat(window, cx);
+                }
+            }
+            git::Event::Terminal(dir) => {
+                let dir = dir.clone();
+                self.terminals
+                    .update(cx, |terminals, cx| terminals.open_in(&dir, window, cx));
+                self.show_terminal(window, cx);
             }
         }
     }
@@ -1181,17 +1235,29 @@ impl Shell {
     }
 
     fn git_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let bar = WindowBar::new(Glyph::GitBranch, "Git").panel(
-            self.git.read(cx).has_panel(),
-            "Changes (Ctrl+B)",
-            self.panel_button(cx),
-        );
+        let tab = self.git.read(cx).tab();
+        let (lead, tools) = self.git.update(cx, |git, cx| (git.lead(cx), git.tools(cx)));
+        let mut bar = WindowBar::new(Glyph::GitBranch, "Git");
+        if let Some(lead) = lead {
+            bar = bar.lead(lead);
+        }
+        if let Some(tools) = tools {
+            bar = bar.tool(tools);
+        }
+        // Only the changes float a panel, the list of files.
+        if tab == GitTab::Changes {
+            bar = bar.panel(
+                self.git.read(cx).has_panel(cx),
+                "Changed files (Ctrl+B)",
+                self.panel_button(cx),
+            );
+        }
         let body = self.git.clone().into_any_element();
         let offers = self.paletting.then(|| {
             let query = self.palette.read(cx).query(cx).to_string();
-            palette::git(&self.git, &self.repos, &query, cx)
+            self.git.read(cx).offers(&query, cx)
         });
-        let ask = ("Find a changed file", offers);
+        let ask = (tab.ask(), offers);
         self.window("git", bar, body, ask, Self::close_git, cx)
     }
 
@@ -1556,6 +1622,20 @@ impl Render for Shell {
             .on_action(cx.listener(Self::on_show_code))
             .on_action(cx.listener(Self::on_find_in_files))
             .on_action(cx.listener(Self::on_show_git))
+            .on_action(cx.listener(|this, _: &GitChanges, _, cx| this.git_tab(GitTab::Changes, cx)))
+            .on_action(cx.listener(|this, _: &GitHistory, _, cx| this.git_tab(GitTab::History, cx)))
+            .on_action(
+                cx.listener(|this, _: &GitBranches, _, cx| this.git_tab(GitTab::Branches, cx)),
+            )
+            .on_action(cx.listener(|this, _: &GitStash, _, cx| this.git_tab(GitTab::Stash, cx)))
+            .on_action(
+                cx.listener(|this, _: &GitWorktrees, _, cx| this.git_tab(GitTab::Worktrees, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &GitConflicts, _, cx| this.git_tab(GitTab::Conflicts, cx)),
+            )
+            .on_action(cx.listener(|this, _: &GitPreviousRepo, _, cx| this.git_repo(false, cx)))
+            .on_action(cx.listener(|this, _: &GitNextRepo, _, cx| this.git_repo(true, cx)))
             .on_action(cx.listener(Self::on_show_chat))
             .on_action(cx.listener(Self::on_show_terminal))
             .on_action(cx.listener(Self::on_open_palette))

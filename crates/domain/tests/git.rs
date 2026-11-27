@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use corvo_domain::{Change, Changed, Hunk, HunkMark, Repo, hunks};
+use corvo_domain::{Change, Changed, Hunk, HunkMark, Repo, Stage, hunks};
 
 fn hunk(mark: HunkMark, lines: std::ops::Range<usize>) -> Hunk {
     Hunk { mark, lines }
@@ -45,6 +45,7 @@ fn changed(path: &str, change: Change) -> Changed {
         path: PathBuf::from(path),
         change,
         from: None,
+        stage: Stage::default(),
     }
 }
 

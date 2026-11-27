@@ -21,7 +21,15 @@ actions!(
         RemovePicked,
         RenamePicked,
         NewWorkspace,
-        FindInFiles
+        FindInFiles,
+        GitChanges,
+        GitHistory,
+        GitBranches,
+        GitStash,
+        GitWorktrees,
+        GitConflicts,
+        GitPreviousRepo,
+        GitNextRepo
     ]
 );
 
@@ -65,6 +73,14 @@ fn action(command: Command) -> Box<dyn Action> {
         Command::RenamePicked => Box::new(RenamePicked),
         Command::NewWorkspace => Box::new(NewWorkspace),
         Command::FindInFiles => Box::new(FindInFiles),
+        Command::GitChanges => Box::new(GitChanges),
+        Command::GitHistory => Box::new(GitHistory),
+        Command::GitBranches => Box::new(GitBranches),
+        Command::GitStash => Box::new(GitStash),
+        Command::GitWorktrees => Box::new(GitWorktrees),
+        Command::GitConflicts => Box::new(GitConflicts),
+        Command::GitPreviousRepo => Box::new(GitPreviousRepo),
+        Command::GitNextRepo => Box::new(GitNextRepo),
     }
 }
 

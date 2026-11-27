@@ -82,6 +82,9 @@ The outline comes from tree-sitter (`crates/syntax`), with no language server ne
 | `ctrl-k`       | Open or close the window's palette        | global |
 | `escape`       | Close the palette, or put the window away | global |
 | `ctrl-b`       | Open or close the window's panel          | global |
+| `alt-1`…`alt-6` | Show a screen of the git window          | global |
+| `alt-up` / `alt-down` | Show the repository above or below in the git window | global |
+| `ctrl-enter`   | Commit what is staged                     | git    |
 | `space` (held) | Drag to move the graph instead of picking | home   |
 | `up` / `down`  | Pick the workspace above or below         | list   |
 | `enter`        | Open the workspace picked                 | list   |
@@ -101,7 +104,19 @@ Files that come, change, go or settle as git reads them, whoever touched them (a
 
 In the editor, the text as it is typed, saved or not, is set against the file in the last commit: a bar beside the line numbers marks the lines added (green) and changed (blue), with a light fill behind them, and a red mark sits where lines were taken out; ticks on the scrollbar show where each is. A file the last commit does not have shows all its lines as added, with no fill.
 
-The git window (`ctrl-shift-g`, or the branch in the status bar) takes turns with the code and the chats over the home. It holds the patch of the file picked, from the last commit to the file on disk; its panel, floating on the right (`ctrl-b` or the bar's button), lists the changed files of each repository under its name, branch and count, each with its letter (`A`, `M`, `D`, `R`, `U`, `!`). **Open**, or a double click on a file, opens it in the code. The window's palette finds a changed file by its path and shows its patch.
+The git window (`ctrl-shift-g`, or the branch in the status bar) takes turns with the code and the chats over the home. Down its left run the icons of its screens, `alt-1` to `alt-6`: Changes, History, Branches, Stash, Worktrees, and Conflicts while something waits on them. Its bar picks the repository shown, from a menu when the workspace links several (`alt-up` and `alt-down` step through them), and carries fetch, pull and push, with how far the branch is ahead of and behind its upstream; a branch tracking nothing publishes to origin. Its palette finds what the screen shown lists. corvo only runs git: pull requests, issues and CI stay with the dev's forge, whichever it is. Nothing waits on a prompt no one sees: no editor opens, and a remote that wants a password fails at once with what it said. What can lose work asks first: discarding, a hard reset, dropping a stash, deleting a branch with commits nowhere else, removing a worktree with changes, giving up a merge.
+
+**Changes** lists what is staged and what is not in a panel floating on the right (`ctrl-b`), each file with its letter (`A`, `M`, `D`, `R`, `U`, `!`); a file changed on both sides shows in both. On hover a row stages, unstages or discards it; each group does it to all. The patch of the side picked shows in the middle: a button beside the first line of each hunk stages it, or unstages it, and lines picked in the gutter stage, unstage or discard alone. **Open**, or a double click, opens the file in the code. The commit is written under the list: `ctrl-enter` or **Commit** commits what is staged, **Amend** amends the last commit starting from its message, and **Write** asks the agent for a message in a chat.
+
+**History** lists the commits of every branch, 200 at a time, with the graph of the branches beside them and the names pointing at each. Its field filters by message, author, hash or path; its scope picks one branch, and **Reflog** shows where HEAD has been, the way back after a mistake. The commit picked shows its message, author, parents, the branches holding it (warning when no remote does yet), its files and their patches, and makes a branch or a tag there, cherry-picks, reverts, checks it out, or resets the branch to it.
+
+**Branches** lists the branches here and on the remotes, and the tags: how far each is from its upstream or from the main branch, whether it is checked out in a worktree, whether it is merged. The branch picked is set against the branch checked out, or another, as a pull request shows it: the commits since they parted, the files changed with their patches, and whether merging it is clean or which files would stop it (`git merge-tree`). It merges into the branch checked out, checks out, rebases the branch checked out onto it, pushes, renames or deletes.
+
+**Stash** lists what was put aside, to apply, pop, drop or turn into a branch, with its files and patch; **Stash changes** puts aside what changed, with a message, the untracked files or not.
+
+**Worktrees** lists the folders checked out from the repository, with the chat of the agent working in each (a chat whose folder is inside it), what changed there and how far it went from the main branch; the one picked is set against the main branch to review and merge it. **New worktree** makes one beside the repository, from a branch, on a new one, or for an agent, which opens a chat in it. A merged one offers **Remove**, one whose folder is gone **Prune**. The rail marks the worktrees while an agent works in one.
+
+**Conflicts** shows what a merge, rebase, cherry-pick or revert stopped on: a band with what is half done (a rebase at which step), **Abort**, **Skip** and **Continue** (or **Commit merge**) once no file is left in conflict. The file picked shows each conflict in place, to keep the current side, the incoming one or both, then **Mark resolved**; a whole file can take one side, go to the agent, or open in the code.
 
 ## Language servers
 

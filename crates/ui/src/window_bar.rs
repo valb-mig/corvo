@@ -18,7 +18,11 @@ pub struct WindowBar {
     glyph: Glyph,
     title: SharedString,
     subtitle: Option<SharedString>,
+    // What follows the name, as a picker of what the window shows.
+    lead: Vec<AnyElement>,
     center: Option<AnyElement>,
+    // Buttons on the right, before the panel's.
+    tools: Vec<AnyElement>,
     panel: Option<Panel>,
     on_close: Option<Handler>,
 }
@@ -36,7 +40,9 @@ impl WindowBar {
             glyph,
             title: title.into(),
             subtitle: None,
+            lead: Vec::new(),
             center: None,
+            tools: Vec::new(),
             panel: None,
             on_close: None,
         }
@@ -45,6 +51,16 @@ impl WindowBar {
     // What sits in the middle of the bar.
     pub fn center(mut self, center: impl IntoElement) -> Self {
         self.center = Some(center.into_any_element());
+        self
+    }
+
+    pub fn lead(mut self, lead: impl IntoElement) -> Self {
+        self.lead.push(lead.into_any_element());
+        self
+    }
+
+    pub fn tool(mut self, tool: impl IntoElement) -> Self {
+        self.tools.push(tool.into_any_element());
         self
     }
 
@@ -110,11 +126,13 @@ impl RenderOnce for WindowBar {
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(subtitle)
-            }));
+            }))
+            .children(self.lead);
         let right = h_flex()
             .flex_1()
             .justify_end()
             .gap_2()
+            .children(self.tools)
             .children(panel)
             .child(key("Esc", cx))
             .child(

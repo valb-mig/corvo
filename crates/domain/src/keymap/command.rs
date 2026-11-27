@@ -35,4 +35,14 @@ pub enum Command {
     NewWorkspace,
     // Brings the code over the home with its search through the project's files.
     FindInFiles,
+    // In the git window: shows one of its screens.
+    GitChanges,
+    GitHistory,
+    GitBranches,
+    GitStash,
+    GitWorktrees,
+    GitConflicts,
+    // In the git window: shows the repository above or below in the workspace's list.
+    GitPreviousRepo,
+    GitNextRepo,
 }

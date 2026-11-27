@@ -9,9 +9,7 @@ use gpui_kit::{App, Entity, SharedString, Window};
 use crate::agents::{Agents, now};
 use crate::pane::chats::ChatWindow;
 use crate::pane::code::Code;
-use crate::pane::git::GitWindow;
 use crate::pane::terminals::Terminals;
-use crate::repos::Repos;
 
 // How many files of a project the code's palette lists at most, of those that match.
 const SHOWN: usize = 200;
@@ -27,7 +25,7 @@ pub struct Offer {
 }
 
 impl Offer {
-    fn new(
+    pub(crate) fn new(
         glyph: Glyph,
         label: impl Into<SharedString>,
         run: impl Fn(&mut Window, &mut App) + 'static,
@@ -40,7 +38,7 @@ impl Offer {
         }
     }
 
-    fn detail(mut self, detail: impl Into<SharedString>) -> Self {
+    pub(crate) fn detail(mut self, detail: impl Into<SharedString>) -> Self {
         self.detail = Some(detail.into());
         self
     }
@@ -209,31 +207,6 @@ pub fn code(
         offer(&file.path, &file.shown, false)
     });
     tabs.chain(rest).collect()
-}
-
-// The git window's: the changed files of each repository, found by their path in it.
-pub fn git(git: &Entity<GitWindow>, repos: &Entity<Repos>, query: &str, cx: &App) -> Vec<Offer> {
-    let mut offers = Vec::new();
-    for repo in repos.read(cx).repos() {
-        for changed in repo.changes() {
-            let shown = inside(Some(repo.root()), &changed.path);
-            if !finds(query, &shown) {
-                continue;
-            }
-            let name = changed
-                .path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let detail = format!("{} · {shown}", changed.change.letter());
-            let (git, path) = (git.clone(), changed.path.clone());
-            let offer = Offer::new(Glyph::GitBranch, name, move |_, cx| {
-                git.update(cx, |git, cx| git.pick(path.clone(), cx));
-            });
-            offers.push(offer.detail(detail));
-        }
-    }
-    offers
 }
 
 // The terminal window's: a new terminal, the terminals by name, then the scripts of the project

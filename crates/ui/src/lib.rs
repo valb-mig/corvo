@@ -15,6 +15,7 @@ pub mod list;
 pub mod motion;
 pub mod notice;
 pub mod path;
+pub mod rail;
 pub mod statusbar;
 pub mod symbol_icon;
 pub mod tab;
