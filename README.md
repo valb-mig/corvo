@@ -56,6 +56,8 @@ A project's stack, as the list of workspaces shows it, comes from the markers of
 
 The workspace opens on its home. Putting the code away reads the open folders from disk again. The home comes back as it was left: the project isolated, the folders open, the cards and groups hidden, the cards moved and the groups; what can no longer be read just doesn't come back.
 
+`ctrl-k` on the home opens a search of the files of every project linked, each shown from its project's name down, leaving out what git ignores. `Enter` shows the file picked on the home: its project stands alone, the folders down to it open, the folder it is in shows all its files out of their piles, what hid it shows again, and the camera glides to its card, picked. `ctrl-enter` opens it in the code instead.
+
 The camera is free, with no edge to stop it: hold `Space` and drag, anywhere on the graph, cards included, or turn the wheel, to move it anywhere; the cursor turns into a hand while `Space` is held. The keys go to the home whenever nothing is over it, and to the graph again on any press on it. Drag a card by its header to move it, with all it holds, wherever reads best; moved cards keep their place while others open and close, and the layout button at the top left (shown once something was moved) puts every card back and centres the graph; groups stay, their frames around their cards where the layout puts them. Hold `Ctrl` and turn the wheel to zoom, around the mouse, or use the − / % / + at the top left (the % goes back to where it started, at 100%). A drag that ends on a card does not open or close it.
 
 Nothing on the home jumps. When cards open, close, hide or come back, the cards that stay glide to their new place, and those that come in come out of the card holding them, fading in; those that go leave at once. The − / % / + and the layout button glide the camera too, while the wheel and drags move it at once. With the desktop's reduced motion on, nothing glides. The motion lives in `corvo_ui::motion`.
@@ -79,7 +81,8 @@ The outline comes from tree-sitter (`crates/syntax`), with no language server ne
 | `ctrl-shift-g` | Open or close the git window              | global |
 | `ctrl-shift-c` | Open or close the chat window             | global |
 | `ctrl-shift-j` | Open or close the terminal window         | global |
-| `ctrl-k`       | Open or close the window's palette        | global |
+| `ctrl-k`       | Open or close the window's palette, or on the home the search of the projects' files | global |
+| `ctrl-enter`   | In the home's palette, open the file in the code | palette |
 | `escape`       | Close the palette, or put the window away | global |
 | `ctrl-b`       | Open or close the window's panel          | global |
 | `alt-1`…`alt-6` | Show a screen of the git window          | global |

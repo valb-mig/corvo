@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use corvo_domain::keymap::{Binding, Command, Keymap, Scope};
+use gpui_kit::base::actions::Confirm;
 use gpui_kit::component::input::{GoToDefinition, Redo, ShowCompletions, Undo};
 use gpui_kit::{Action, App, KeyBinding, KeyBindingContextPredicate, actions};
 
@@ -37,11 +38,17 @@ actions!(
 pub const WORKSPACES: &str = "Workspaces";
 
 pub fn bind(keymap: &Keymap, cx: &mut App) {
-    let bindings: Vec<_> = keymap
+    let mut bindings: Vec<_> = keymap
         .bindings()
         .iter()
         .filter_map(|b| binding(b, cx))
         .collect();
+    // In a palette, Ctrl+Enter picks the way the offer has besides Enter's.
+    bindings.push(KeyBinding::new(
+        "ctrl-enter",
+        Confirm { secondary: true },
+        Some("Command"),
+    ));
     cx.bind_keys(bindings);
 }
 

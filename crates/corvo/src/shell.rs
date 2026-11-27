@@ -111,6 +111,9 @@ pub struct Shell {
     before: Option<FocusHandle>,
     index: HashMap<PathBuf, Rc<Vec<Listed>>>,
     search: Search,
+    // The files of every project linked, for the home's palette, with the projects walked.
+    home_files: Option<(Vec<PathBuf>, Rc<Vec<Listed>>)>,
+    home_search: Search,
     // The panel floating on the right of the code, with the file tree: opened and closed with
     // ctrl-b or the button of the window's bar.
     panel: bool,
@@ -301,6 +304,8 @@ impl Shell {
             before: None,
             index: HashMap::new(),
             search: Search::default(),
+            home_files: None,
+            home_search: Search::default(),
             panel: false,
             _subs: subs,
         };
@@ -610,10 +615,15 @@ impl Shell {
         self.files.update(cx, |files, cx| files.refresh(cx));
         self.finds.update(cx, |finds, cx| finds.rerun(cx));
         self.read_scripts(cx);
-        // The files listed for the palette are walked again when next asked.
+        // The files listed for the palettes are walked again when next asked.
         self.index.clear();
+        self.home_files = None;
         if self.paletting {
-            self.walk(cx);
+            if self.over_home(cx) {
+                self.walk(cx);
+            } else {
+                self.walk_home(cx);
+            }
         }
     }
 
@@ -629,18 +639,25 @@ impl Shell {
         }
     }
 
-    // Opens the palette of the window in front, with nothing typed; with only the home, none.
+    // Whether a window is over the home.
+    fn over_home(&self, cx: &App) -> bool {
+        self.code.read(cx).is_shown() || self.chatting || self.gitting || self.terming
+    }
+
+    // Opens the palette of the window in front, with nothing typed; with only the home, the
+    // home's, which finds the files of every project.
     fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !(self.code.read(cx).is_shown() || self.chatting || self.gitting || self.terming) {
-            return;
-        }
         self.before = window.focused(cx);
         self.paletting = true;
         self.palette
             .update(cx, |palette, cx| palette.set_query("", window, cx));
         let palette = self.palette.clone();
         palette.update(cx, |palette, cx| palette.focus(window, cx));
-        self.walk(cx);
+        if self.over_home(cx) {
+            self.walk(cx);
+        } else {
+            self.walk_home(cx);
+        }
         cx.notify();
     }
 
@@ -655,6 +672,47 @@ impl Shell {
             None => self.rest(window, cx),
         }
         cx.notify();
+    }
+
+    // Walks the files of every project linked off the main thread, for the home's palette,
+    // unless the same projects were walked. Each path is shown from the folder its project is
+    // in, so it starts with the project's name.
+    fn walk_home(&mut self, cx: &mut Context<Self>) {
+        const MOST: usize = 20_000;
+        let projects = self.bench.read(cx).atlas().projects().to_vec();
+        if self
+            .home_files
+            .as_ref()
+            .is_some_and(|(walked, _)| *walked == projects)
+        {
+            return;
+        }
+        // Empty while it walks, so it walks once.
+        self.home_files = Some((projects.clone(), Rc::default()));
+        let task = cx.background_executor().spawn({
+            let projects = projects.clone();
+            async move {
+                let mut listed = Vec::new();
+                for project in &projects {
+                    let base = project.parent().unwrap_or(project);
+                    listed.extend(
+                        corvo_fs::files(project, MOST)
+                            .into_iter()
+                            .map(|path| Listed::new(base, path)),
+                    );
+                }
+                listed
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let files = task.await;
+            this.update(cx, |this, cx| {
+                this.home_files = Some((projects, Rc::new(files)));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // Walks the files of the project in front off the main thread, unless they were walked.
@@ -1286,6 +1344,25 @@ impl Shell {
         self.window("terminal", bar, body, ask, Self::close_terminal, cx)
     }
 
+    // The home's palette, over the graph: the files of every project, Enter showing the one
+    // picked on the graph and Ctrl+Enter opening it in the code.
+    fn home_palette(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let query = self.palette.read(cx).query(cx).to_string();
+        let files = self
+            .home_files
+            .as_ref()
+            .map(|(_, files)| files.clone())
+            .unwrap_or_default();
+        let offers = palette::home(&self.home, &self.code, &files, &self.home_search, &query);
+        let hint = "Enter shows it on the graph · Ctrl+Enter opens it";
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(self.palette("Find a file", offers, Some(hint), cx))
+    }
+
     // A window over the home, which steps back behind a dimmed layer: its bar along the top, with
     // the field of its palette in the middle, and what it holds under it; the palette, while open,
     // under the bar with what it offers. Esc, the bar's × or a click on the dimmed home puts the
@@ -1301,7 +1378,7 @@ impl Shell {
         close: fn(&mut Self, &mut Window, &mut Context<Self>),
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let palette = offers.map(|offers| self.palette(placeholder, offers, cx));
+        let palette = offers.map(|offers| self.palette(placeholder, offers, None, cx));
         let theme = cx.theme();
         let (dimmed, closer) = (cx.entity().downgrade(), cx.entity().downgrade());
         let opener = cx.entity().downgrade();
@@ -1372,6 +1449,7 @@ impl Shell {
         &self,
         placeholder: &'static str,
         offers: Vec<Offer>,
+        hint: Option<&'static str>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let theme = cx.theme();
@@ -1390,7 +1468,12 @@ impl Shell {
                 asker.update(cx, |_, cx| cx.notify()).ok();
             })
             .on_confirm(move |at, window, cx| {
-                let Some(run) = offers.get(at.row).map(|offer| offer.run.clone()) else {
+                // Ctrl+Enter picks it the other way, when it has one.
+                let ctrl = window.modifiers().control;
+                let Some(run) = offers.get(at.row).map(|offer| match (&offer.alt, ctrl) {
+                    (Some(alt), true) => alt.clone(),
+                    _ => offer.run.clone(),
+                }) else {
                     return;
                 };
                 picker
@@ -1436,7 +1519,17 @@ impl Shell {
                     .bg(theme.popover)
                     .shadow_lg()
                     .overflow_hidden()
-                    .child(command),
+                    .child(command)
+                    .children(hint.map(|hint| {
+                        div()
+                            .px_3()
+                            .py_1p5()
+                            .border_t_1()
+                            .border_color(theme.border)
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(hint)
+                    })),
             )
             .with_animation("palette-drop", motion::opening(), |panel, delta| {
                 panel
@@ -1537,6 +1630,8 @@ impl Render for Shell {
             Some(self.git_overlay(cx).into_any_element())
         } else if self.terming {
             Some(self.terminal_overlay(cx).into_any_element())
+        } else if self.paletting {
+            Some(self.home_palette(cx).into_any_element())
         } else {
             None
         };

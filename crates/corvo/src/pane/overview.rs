@@ -173,6 +173,21 @@ impl Overview {
         Some(format!("{}{more}", bytes(weight.bytes)).into())
     }
 
+    // Brings a file into sight on the home, as the palette finds it: its project alone, the
+    // folders down to it open, and the camera gliding to its card, picked.
+    pub fn reveal(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        match self.bench.update(cx, |bench, _| bench.show_on_home(path)) {
+            Ok(true) => {
+                self.camera.look_at(id(path));
+                cx.emit(Event::Arranged);
+                self.focus(window, cx);
+                cx.notify();
+            }
+            Ok(false) => {}
+            Err(err) => notice::warn(format!("{}: {err}", path.display()), window, cx),
+        }
+    }
+
     // Every card back where the layout puts it, the whole graph centred in view; groups stay.
     pub fn reorganize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.camera.center();

@@ -9,6 +9,7 @@ use gpui_kit::{App, Entity, SharedString, Window};
 use crate::agents::{Agents, now};
 use crate::pane::chats::ChatWindow;
 use crate::pane::code::Code;
+use crate::pane::overview::Overview;
 use crate::pane::terminals::Terminals;
 
 // How many files of a project the code's palette lists at most, of those that match.
@@ -16,12 +17,14 @@ const SHOWN: usize = 200;
 
 type Run = Rc<dyn Fn(&mut Window, &mut App)>;
 
-// One thing a window's palette offers: what it shows, and what picking it does.
+// One thing a window's palette offers: what it shows, what picking it does, and what picking it
+// with Ctrl held does, when that is something else.
 pub struct Offer {
     pub glyph: Glyph,
     pub label: SharedString,
     pub detail: Option<SharedString>,
     pub run: Run,
+    pub alt: Option<Run>,
 }
 
 impl Offer {
@@ -35,7 +38,13 @@ impl Offer {
             label: label.into(),
             detail: None,
             run: Rc::new(run),
+            alt: None,
         }
+    }
+
+    pub(crate) fn alt(mut self, alt: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.alt = Some(Rc::new(alt));
+        self
     }
 
     pub(crate) fn detail(mut self, detail: impl Into<SharedString>) -> Self {
@@ -207,6 +216,43 @@ pub fn code(
         offer(&file.path, &file.shown, false)
     });
     tabs.chain(rest).collect()
+}
+
+// The home's: the files of every project linked, by their path from the folder the projects are
+// in, so each starts with its project's name. Picking one shows it on the home; with Ctrl, it
+// opens in the code.
+pub fn home(
+    home: &Entity<Overview>,
+    code: &Entity<Code>,
+    files: &Rc<Vec<Listed>>,
+    search: &Search,
+    query: &str,
+) -> Vec<Offer> {
+    search
+        .found(files, query, &[])
+        .iter()
+        .map(|row| {
+            let file = &files[*row];
+            let name = file
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let dir = Path::new(&file.shown)
+                .parent()
+                .map(|dir| dir.display().to_string())
+                .unwrap_or_default();
+            let (home, code) = (home.clone(), code.clone());
+            let (shown, opened) = (file.path.clone(), file.path.clone());
+            Offer::new(Glyph::FileText, name, move |window, cx| {
+                home.update(cx, |home, cx| home.reveal(&shown, window, cx));
+            })
+            .alt(move |window, cx| {
+                code.update(cx, |code, cx| code.open(&opened, window, cx));
+            })
+            .detail(dir)
+        })
+        .collect()
 }
 
 // The terminal window's: a new terminal, the terminals by name, then the scripts of the project
