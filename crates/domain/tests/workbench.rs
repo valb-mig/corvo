@@ -288,6 +288,20 @@ fn save_writes_and_cleans() {
 }
 
 #[test]
+fn clean_marks_a_tab_back_to_its_file_without_writing() {
+    let fs = project();
+    let mut bench = bench(fs.clone());
+    let main = Path::new("/p/main.rs");
+    bench.open(main).unwrap();
+    bench.touch(main);
+
+    bench.clean(main);
+
+    assert!(!bench.tabs().active().unwrap().is_dirty());
+    assert_eq!(fs.files.borrow()[main], "fn main() {}");
+}
+
+#[test]
 fn outline_reads_file_through_syntax() {
     let bench = bench(project());
 

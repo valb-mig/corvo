@@ -203,6 +203,9 @@ impl Shell {
             cx.subscribe_in(&git, window, Self::on_git),
             cx.subscribe_in(&chats, window, Self::on_chats),
             cx.subscribe_in(&scripts, window, Self::on_scripts),
+            // What had the keys went away, as a field of the git window when its screen changes or
+            // a dialog closes: they go back to the window in front, where its own keys reach it.
+            cx.on_focus_lost(window, |this, window, cx| this.rest(window, cx)),
             // The terminal window's bar counts its terminals, and so does the status bar.
             cx.observe(&terminals, |_, _, cx| cx.notify()),
             // The chat window's bar counts its chats.

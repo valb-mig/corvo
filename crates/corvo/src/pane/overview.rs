@@ -176,9 +176,18 @@ impl Overview {
     // Brings a file into sight on the home, as the palette finds it: its project alone, the
     // folders down to it open, and the camera gliding to its card, picked.
     pub fn reveal(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        let root =
+            |cx: &mut Context<Self>| self.bench.read(cx).atlas().root().map(Path::to_path_buf);
+        let before = root(cx);
         match self.bench.update(cx, |bench, _| bench.show_on_home(path)) {
             Ok(true) => {
                 self.camera.look_at(id(path));
+                // Another project standing alone is the one in front, as when its card is
+                // clicked: the status bar and the file tree follow it.
+                let after = root(cx);
+                if after != before {
+                    cx.emit(Event::Isolated(after));
+                }
                 cx.emit(Event::Arranged);
                 self.focus(window, cx);
                 cx.notify();
