@@ -1,4 +1,5 @@
 mod chats;
+mod ignored;
 mod options;
 mod store;
 
@@ -34,21 +35,25 @@ pub fn files(root: &Path, most: usize) -> Vec<std::path::PathBuf> {
 }
 
 impl Fs for LocalFs {
+    // The folder's entries but .git and what git ignores. The rules of git are kept between
+    // listings (see ignored), so a folder costs its own entries, not a reading of every rule file
+    // above it.
     fn list(&self, dir: &Path) -> io::Result<Vec<Node>> {
-        let walk = WalkBuilder::new(dir)
-            .max_depth(Some(1))
-            .hidden(false)
-            .filter_entry(|entry| entry.file_name() != ".git")
-            .build();
-
+        let rules = ignored::rules(dir);
         let mut nodes = Vec::new();
-        for entry in walk {
-            let entry = entry.map_err(io::Error::other)?;
-            if entry.depth() == 0 {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.file_name() == ".git" {
                 continue;
             }
-            let path = entry.into_path();
-            nodes.push(if path.is_dir() {
+            let kind = entry.file_type()?;
+            let path = entry.path();
+            if rules.ignores(&path, kind.is_dir()) {
+                continue;
+            }
+            // A link to a folder shows as a folder.
+            let dir = kind.is_dir() || (kind.is_symlink() && path.is_dir());
+            nodes.push(if dir {
                 Node::dir(path)
             } else {
                 Node::file(path)
