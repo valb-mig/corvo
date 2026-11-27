@@ -20,6 +20,7 @@ gpui-kit = { version = "0.10", default-features = false }
 agent-client-protocol-schema = { version = "1.22", default-features = false }
 alacritty_terminal = { version = "0.26", default-features = false }
 ignore = "0.4"
+regex = "1"
 anyhow = "1"
 base64 = "0.22"
 futures = "0.3"

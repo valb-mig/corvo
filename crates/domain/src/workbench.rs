@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::port::{Depth, Fs, Syntax};
 use crate::{
-    Arrangement, Atlas, Content, Lang, Mark, Mention, Moved, Node, Place, Symbol, Tabs, Tree,
-    excerpt,
+    Arrangement, Atlas, Content, Finder, Lang, Mark, Mention, Moved, Node, Place, Symbol, Tabs,
+    Tree, excerpt,
 };
 
 pub struct Workbench {
@@ -133,6 +133,17 @@ impl Workbench {
         self.fs.write(path, text)?;
         self.tabs.clean(path);
         Ok(())
+    }
+
+    // Replaces what the finder finds in a file on disk; how many it replaced. A file where it
+    // finds nothing is left as it was.
+    pub fn replace(&mut self, path: &Path, finder: &Finder, with: &str) -> io::Result<usize> {
+        let text = self.text(path)?;
+        let (text, count) = finder.replace(&text, with);
+        if count > 0 {
+            self.fs.write(path, &text)?;
+        }
+        Ok(count)
     }
 
     pub fn chart(&mut self, projects: &[PathBuf]) -> io::Result<()> {
