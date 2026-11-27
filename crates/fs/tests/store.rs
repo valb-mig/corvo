@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use corvo_domain::port::Store;
+use corvo_domain::port::{Saved, Store};
 use corvo_domain::{Arrangement, Group, Mark, Node, Uuid, Workspace};
 use corvo_fs::JsonStore;
 
@@ -16,7 +16,7 @@ fn missing_file_loads_empty() {
     let dir = scratch("missing");
     let store = JsonStore::new(dir.join("workspaces.json"));
 
-    assert!(store.load().unwrap().is_empty());
+    assert_eq!(store.load().unwrap(), Saved::default());
 }
 
 #[test]
@@ -29,9 +29,15 @@ fn saves_and_loads_back() {
         vec![PathBuf::from("/p")],
     )];
 
-    store.save(&items).unwrap();
+    store.save(&items, Some(Uuid::from_u128(1))).unwrap();
 
-    assert_eq!(store.load().unwrap(), items);
+    assert_eq!(
+        store.load().unwrap(),
+        Saved {
+            items,
+            last: Some(Uuid::from_u128(1)),
+        }
+    );
     assert!(!Path::new(&dir.join("corvo/workspaces.json.tmp")).exists());
     fs::remove_dir_all(dir).unwrap();
 }
@@ -76,9 +82,9 @@ fn keeps_how_the_home_was_left() {
     let items =
         vec![Workspace::new(Uuid::from_u128(1), "work", vec![PathBuf::from("/p")]).arranged(home)];
 
-    store.save(&items).unwrap();
+    store.save(&items, None).unwrap();
 
-    assert_eq!(store.load().unwrap(), items);
+    assert_eq!(store.load().unwrap().items, items);
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -93,8 +99,10 @@ fn a_file_from_before_homes_were_kept_loads() {
     )
     .unwrap();
 
-    let items = JsonStore::new(&path).load().unwrap();
+    let saved = JsonStore::new(&path).load().unwrap();
+    let items = saved.items;
 
+    assert_eq!(saved.last, None);
     assert_eq!(
         (items[0].name(), items[0].projects()),
         ("w", &[PathBuf::from("/p")][..])
@@ -114,8 +122,8 @@ fn a_numbered_workspace_gets_a_uuid_that_holds() {
     )
     .unwrap();
 
-    let first = JsonStore::new(&path).load().unwrap();
-    let again = JsonStore::new(&path).load().unwrap();
+    let first = JsonStore::new(&path).load().unwrap().items;
+    let again = JsonStore::new(&path).load().unwrap().items;
 
     assert_eq!(first[0].id(), again[0].id());
     fs::remove_dir_all(dir).unwrap();

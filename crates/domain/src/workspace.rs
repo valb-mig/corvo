@@ -64,12 +64,18 @@ pub fn owner<'a>(file: &Path, projects: &'a [PathBuf]) -> Option<&'a Path> {
 pub struct Workspaces {
     store: Box<dyn Store>,
     items: Vec<Workspace>,
+    // The one picked last on their list, picked again when the list comes back.
+    last: Option<Uuid>,
 }
 
 impl Workspaces {
     pub fn load(store: Box<dyn Store>) -> io::Result<Self> {
-        let items = store.load()?;
-        Ok(Self { store, items })
+        let saved = store.load()?;
+        Ok(Self {
+            store,
+            items: saved.items,
+            last: saved.last,
+        })
     }
 
     pub fn items(&self) -> &[Workspace] {
@@ -80,22 +86,44 @@ impl Workspaces {
         self.items.iter().find(|item| item.id == id)
     }
 
-    pub fn add(&mut self, name: &str) -> io::Result<Uuid> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "workspace name is empty",
-            ));
+    // The one picked last, while it is still there.
+    pub fn last(&self) -> Option<Uuid> {
+        self.last.filter(|id| self.get(*id).is_some())
+    }
+
+    pub fn pick(&mut self, id: Uuid) -> io::Result<()> {
+        if self.last == Some(id) || self.get(id).is_none() {
+            return Ok(());
         }
+        self.last = Some(id);
+        self.save()
+    }
+
+    pub fn add(&mut self, name: &str) -> io::Result<Uuid> {
+        let name = named(name)?;
         let id = Uuid::new_v4();
         self.items.push(Workspace::new(id, name, Vec::new()));
         self.save()?;
         Ok(id)
     }
 
+    pub fn rename(&mut self, id: Uuid, name: &str) -> io::Result<()> {
+        let name = named(name)?;
+        let Some(item) = self.item_mut(id) else {
+            return Ok(());
+        };
+        if item.name == name {
+            return Ok(());
+        }
+        item.name = name.to_owned();
+        self.save()
+    }
+
     pub fn remove(&mut self, id: Uuid) -> io::Result<()> {
         self.items.retain(|item| item.id != id);
+        if self.last == Some(id) {
+            self.last = None;
+        }
         self.save()
     }
 
@@ -116,6 +144,41 @@ impl Workspaces {
         self.save()
     }
 
+    // Points a project that was moved at where it is now, in the same place among the others. If
+    // the new place is linked already, the old one just goes.
+    pub fn relocate(&mut self, id: Uuid, from: &Path, to: &Path) -> io::Result<()> {
+        let Some(item) = self.item_mut(id) else {
+            return Ok(());
+        };
+        let Some(ix) = item.projects.iter().position(|known| known == from) else {
+            return Ok(());
+        };
+        if item.projects.iter().any(|known| known == to) {
+            item.projects.remove(ix);
+        } else {
+            item.projects[ix] = to.to_path_buf();
+        }
+        if item.home.root.as_deref() == Some(from) {
+            item.home.root = Some(to.to_path_buf());
+        }
+        self.save()
+    }
+
+    // Has the home open next time with only this project, isolated, or with all of them.
+    pub fn focus(&mut self, id: Uuid, project: Option<&Path>) -> io::Result<()> {
+        let Some(item) = self.item_mut(id) else {
+            return Ok(());
+        };
+        let root = project
+            .filter(|project| item.projects.iter().any(|known| known == project))
+            .map(Path::to_path_buf);
+        if item.home.root == root {
+            return Ok(());
+        }
+        item.home.root = root;
+        self.save()
+    }
+
     // Keeps how the home was left, saving only when it changed.
     pub fn arrange(&mut self, id: Uuid, home: Arrangement) -> io::Result<()> {
         let Some(item) = self.item_mut(id) else {
@@ -133,6 +196,17 @@ impl Workspaces {
     }
 
     fn save(&self) -> io::Result<()> {
-        self.store.save(&self.items)
+        self.store.save(&self.items, self.last)
     }
+}
+
+fn named(name: &str) -> io::Result<&str> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "workspace name is empty",
+        ));
+    }
+    Ok(name)
 }

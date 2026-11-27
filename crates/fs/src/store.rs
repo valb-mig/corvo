@@ -2,13 +2,16 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
 
-use corvo_domain::port::Store;
+use corvo_domain::port::{Saved, Store};
 use corvo_domain::{Arrangement, Group, Mark, Node, Uuid, Workspace};
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Deserialize, Serialize)]
 struct File {
     workspaces: Vec<Entry>,
+    // The workspace picked last on the list; a file from before it was kept has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last: Option<Uuid>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -214,10 +217,10 @@ pub(crate) fn config_dir() -> io::Result<PathBuf> {
 }
 
 impl Store for JsonStore {
-    fn load(&self) -> io::Result<Vec<Workspace>> {
+    fn load(&self) -> io::Result<Saved> {
         let text = match std::fs::read_to_string(&self.path) {
             Ok(text) => text,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Saved::default()),
             Err(err) => return Err(err),
         };
         let file: File = serde_json::from_str(&text).map_err(|err| {
@@ -241,15 +244,17 @@ impl Store for JsonStore {
                 Workspace::new(id, entry.name, entry.projects).arranged(entry.home.into())
             })
             .collect();
+        let last = file.last;
         // Written down at once, so the new ids hold from now on.
         if old {
-            self.save(&items)?;
+            self.save(&items, last)?;
         }
-        Ok(items)
+        Ok(Saved { items, last })
     }
 
-    fn save(&self, items: &[Workspace]) -> io::Result<()> {
+    fn save(&self, items: &[Workspace], last: Option<Uuid>) -> io::Result<()> {
         let file = File {
+            last,
             workspaces: items
                 .iter()
                 .map(|item| Entry {
