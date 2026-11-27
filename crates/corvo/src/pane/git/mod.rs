@@ -163,7 +163,7 @@ impl GitWindow {
         };
         let changes = cx.new(|cx| Changes::new(ctx.clone(), window, cx));
         let history = cx.new(|cx| History::new(ctx.clone(), window, cx));
-        let branches = cx.new(|cx| Branches::new(ctx.clone(), cx));
+        let branches = cx.new(|cx| Branches::new(ctx.clone(), window, cx));
         let stashes = cx.new(|cx| Stashes::new(ctx.clone(), window, cx));
         let worktrees = cx.new(|cx| Worktrees::new(ctx.clone(), cx));
         let conflicts = cx.new(|cx| Conflicts::new(ctx.clone(), cx));
@@ -319,6 +319,25 @@ impl GitWindow {
         self.changes.update(cx, |changes, cx| {
             changes.show(root, cx);
             changes.pick(path, cx);
+        });
+        cx.notify();
+    }
+
+    // Opens a branch in the branches.
+    pub fn pick_branch(&mut self, name: String, cx: &mut Context<Self>) {
+        self.tab = Tab::Branches;
+        self.branches
+            .update(cx, |branches, cx| branches.pick_branch(name, cx));
+        cx.notify();
+    }
+
+    // Opens a worktree in the worktrees.
+    pub fn pick_worktree(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.tab = Tab::Worktrees;
+        let root = self.root.clone();
+        self.worktrees.update(cx, |worktrees, cx| {
+            worktrees.show(root, cx);
+            worktrees.pick(path, cx);
         });
         cx.notify();
     }

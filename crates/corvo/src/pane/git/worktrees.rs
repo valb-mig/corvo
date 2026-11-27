@@ -34,6 +34,8 @@ impl Worktrees {
     ) {
     }
 
+    pub fn pick(&mut self, _: PathBuf, _: &mut Context<Self>) {}
+
     pub fn agent_working(&self, _: &App) -> bool {
         false
     }
