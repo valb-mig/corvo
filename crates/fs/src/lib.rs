@@ -1,6 +1,7 @@
 mod chats;
 mod ignored;
 mod options;
+mod search;
 mod store;
 pub mod trash;
 
@@ -13,6 +14,7 @@ use ignore::WalkBuilder;
 
 pub use chats::JsonChats;
 pub use options::JsonOptions;
+pub use search::search;
 pub use store::JsonStore;
 
 #[derive(Clone, Copy, Debug, Default)]

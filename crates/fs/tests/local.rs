@@ -235,3 +235,50 @@ fn renaming_never_writes_over_another_file() {
     assert_eq!(fs::read_to_string(dir.join("c.rs")).unwrap(), "a");
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn search_reads_text_files_git_keeps_and_open_ones_as_typed() {
+    use std::collections::HashMap;
+
+    use corvo_domain::Query;
+
+    let dir = scratch("search");
+    fs::create_dir_all(dir.join(".git")).unwrap();
+    fs::create_dir_all(dir.join("target")).unwrap();
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join(".gitignore"), "/target\n").unwrap();
+    fs::write(dir.join("target/out.rs"), "needle").unwrap();
+    fs::write(dir.join(".git/config"), "needle").unwrap();
+    fs::write(dir.join("blob.bin"), b"needle\0\x01").unwrap();
+    fs::write(dir.join("src/b.rs"), "one needle\ntwo needle").unwrap();
+    fs::write(dir.join("src/a.rs"), "nothing on disk").unwrap();
+    fs::write(dir.join("src/c.rs"), "no").unwrap();
+    let open = HashMap::from([(dir.join("src/a.rs"), "needle typed".to_owned())]);
+    let finder = Query {
+        text: "needle".into(),
+        ..Query::default()
+    }
+    .finder()
+    .unwrap()
+    .unwrap();
+
+    let found = corvo_fs::search(&dir, &finder, &open, 100, &|| false).unwrap();
+
+    let files: Vec<_> = found
+        .files
+        .iter()
+        .map(|(path, hits)| {
+            let count: usize = hits.iter().map(|hit| hit.count).sum();
+            (path.strip_prefix(&dir).unwrap().to_owned(), count)
+        })
+        .collect();
+    assert_eq!(
+        files,
+        [
+            (PathBuf::from("src/a.rs"), 1),
+            (PathBuf::from("src/b.rs"), 2)
+        ]
+    );
+    assert!(corvo_fs::search(&dir, &finder, &open, 100, &|| true).is_none());
+    fs::remove_dir_all(dir).unwrap();
+}
