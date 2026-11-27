@@ -1,6 +1,7 @@
 use corvo_domain::SymbolKind;
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::list::ListItem;
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::tree::{Tree, tree};
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
 use gpui_kit::{
@@ -34,6 +35,17 @@ impl Panel {
         Self {
             tree: tree(state, move |_, entry, _, _, cx| row(entry, cx)),
         }
+    }
+
+    // What a right click on a row offers; the row stays marked while the menu is open.
+    pub fn context_menu(
+        mut self,
+        f: impl Fn(&Entry, PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static,
+    ) -> Self {
+        self.tree = self
+            .tree
+            .context_menu(move |_, entry, menu, window, cx| f(entry, menu, window, cx));
+        self
     }
 }
 
@@ -123,21 +135,42 @@ impl Row {
         }
     }
 
+    // A file or folder whose name is being typed: a field in place of its label.
+    pub fn naming(entry: &Entry, dir: bool, field: impl IntoElement, cx: &App) -> ListItem {
+        let label = entry.item().label.clone();
+        let icon = if dir {
+            FolderIcon::new(label).size(ICON).into_any_element()
+        } else {
+            FileIcon::new(label).size(ICON).into_any_element()
+        };
+        Self::frame(entry).child(
+            h_flex()
+                .w_full()
+                .gap(px(6.))
+                .child(chevron(entry, cx))
+                .child(icon)
+                .child(div().flex_1().min_w_0().child(field)),
+        )
+    }
+
     fn build(entry: &Entry, icon: impl IntoElement, cx: &App) -> ListItem {
         let item = entry.item();
-        ListItem::new(item.id.clone())
+        Self::frame(entry).child(
+            h_flex()
+                .gap(px(6.))
+                .child(chevron(entry, cx))
+                .child(icon)
+                .child(label(item.label.clone())),
+        )
+    }
+
+    fn frame(entry: &Entry) -> ListItem {
+        ListItem::new(entry.item().id.clone())
             .h(HEIGHT)
             .py_0()
             .text_size(TEXT)
             .pl(INDENT * entry.depth() + px(6.))
             .pr_2()
-            .child(
-                h_flex()
-                    .gap(px(6.))
-                    .child(chevron(entry, cx))
-                    .child(icon)
-                    .child(label(item.label.clone())),
-            )
     }
 }
 
