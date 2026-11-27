@@ -285,3 +285,50 @@ impl PatchView {
         cx.notify();
     }
 }
+
+// Asks the dev for a name, as a new branch's or a tag's, in a dialog with a field. Nothing
+// typed keeps the dialog open.
+pub fn ask_name(
+    title: impl Into<SharedString>,
+    placeholder: impl Into<SharedString>,
+    value: impl Into<SharedString>,
+    ok: impl Into<SharedString>,
+    window: &mut gpui_kit::Window,
+    cx: &mut App,
+    then: impl Fn(String, &mut gpui_kit::Window, &mut App) + 'static,
+) {
+    use gpui_kit::Focusable as _;
+    use gpui_kit::component::WindowExt as _;
+    use gpui_kit::component::input::{Input, InputState};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let (title, ok) = (title.into(), ok.into());
+    let (placeholder, value) = (placeholder.into(), value.into());
+    let field = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder(placeholder)
+            .default_value(value)
+    });
+    let first = Cell::new(true);
+    let then = Rc::new(then);
+    window.open_alert_dialog(cx, move |alert, window, cx| {
+        if first.replace(false) {
+            field.focus_handle(cx).focus(window, cx);
+        }
+        let (field_ok, then) = (field.clone(), then.clone());
+        alert
+            .title(title.clone())
+            .child(div().pt_2().child(Input::new(&field)))
+            .confirm()
+            .ok_text(ok.clone())
+            .on_ok(move |_, window, cx| {
+                let name = field_ok.read(cx).value().trim().to_owned();
+                if name.is_empty() {
+                    return false;
+                }
+                then(name, window, cx);
+                true
+            })
+    });
+}

@@ -162,7 +162,7 @@ impl GitWindow {
             window: cx.entity().downgrade(),
         };
         let changes = cx.new(|cx| Changes::new(ctx.clone(), window, cx));
-        let history = cx.new(|cx| History::new(ctx.clone(), cx));
+        let history = cx.new(|cx| History::new(ctx.clone(), window, cx));
         let branches = cx.new(|cx| Branches::new(ctx.clone(), cx));
         let stashes = cx.new(|cx| Stashes::new(ctx.clone(), window, cx));
         let worktrees = cx.new(|cx| Worktrees::new(ctx.clone(), cx));
@@ -320,6 +320,14 @@ impl GitWindow {
             changes.show(root, cx);
             changes.pick(path, cx);
         });
+        cx.notify();
+    }
+
+    // Opens a commit in the history.
+    pub fn pick_commit(&mut self, hash: String, cx: &mut Context<Self>) {
+        self.tab = Tab::History;
+        self.history
+            .update(cx, |history, cx| history.pick_commit(hash, cx));
         cx.notify();
     }
 
