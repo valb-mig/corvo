@@ -13,7 +13,7 @@ use crate::pane::overview::Overview;
 use crate::pane::terminals::Terminals;
 
 // How many files of a project the code's palette lists at most, of those that match.
-const SHOWN: usize = 200;
+const SHOWN: usize = 50;
 
 type Run = Rc<dyn Fn(&mut Window, &mut App)>;
 

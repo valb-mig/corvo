@@ -62,5 +62,5 @@ pub use tabs::Tabs;
 pub use tree::Tree;
 pub use uuid::Uuid;
 pub use weight::{Weight, Weights, bytes, weigh};
-pub use workbench::{Renamed, Workbench};
+pub use workbench::{Outliner, Renamed, Workbench};
 pub use workspace::{Workspace, Workspaces, owner};

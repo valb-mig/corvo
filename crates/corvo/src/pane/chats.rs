@@ -6,11 +6,11 @@ use corvo_domain::{Chat, End, Entry, Message, Run, Status, Step, StepKind, ago, 
 use corvo_ui::agent::{AgentLogo, Sign, diff_lines, step_glyph};
 use corvo_ui::drawer::Drawer;
 use corvo_ui::field;
+use corvo_ui::spinner::Spinner;
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
@@ -690,7 +690,7 @@ impl ChatWindow {
                                     .gap_2()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
-                                    .child(Spinner::new().xsmall())
+                                    .child(Spinner::new())
                                     .child("Thinking…")
                                     .into_any_element(),
                             )
@@ -821,7 +821,7 @@ impl ChatWindow {
                         .child(format!("{failed} failed")),
                 )
             })
-            .when(busy, |head| head.child(Spinner::new().xsmall()));
+            .when(busy, |head| head.child(Spinner::new()));
         let count = steps.len();
         let list = open.then(|| {
             v_flex().children(steps.iter().enumerate().map(|(n, step)| {
@@ -864,7 +864,7 @@ impl ChatWindow {
         let voice = if ask.is_some() { theme.warning } else { muted };
 
         let lead: AnyElement = if running && ask.is_none() {
-            Spinner::new().xsmall().into_any_element()
+            Spinner::new().into_any_element()
         } else {
             let (glyph, tint) = if ask.is_some() {
                 (step_glyph(step.kind()), theme.warning)
@@ -1237,7 +1237,7 @@ fn status(chat: &Chat, cx: &App) -> AnyElement {
             let doing = reply
                 .current()
                 .map_or("Thinking".to_owned(), |step| one_line(step.title()));
-            line.child(Spinner::new().xsmall())
+            line.child(Spinner::new())
                 .child(div().truncate().child(doing))
                 .into_any_element()
         }

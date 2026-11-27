@@ -18,7 +18,7 @@ use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::{
     App, AppContext as _, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, ScrollStrategy, SharedString, Styled as _,
-    Subscription, WeakEntity, Window, div,
+    Subscription, Task, WeakEntity, Window, div,
 };
 
 use crate::repos::Repos;
@@ -78,6 +78,8 @@ fn typing_dir(typing: &Typing, dirs: &HashSet<SharedString>) -> bool {
 struct Outline {
     file: Option<PathBuf>,
     symbols: Vec<Symbol>,
+    // The line the cursor is on, to open the way to once the symbols come.
+    line: Option<u32>,
     // The rows from the file down to the symbol the cursor is in.
     way: Vec<SharedString>,
     open: HashSet<SharedString>,
@@ -110,6 +112,8 @@ pub struct Files {
     outline: Outline,
     marks: Rc<HashMap<SharedString, Mark>>,
     naming: Option<Naming>,
+    // The outline being parsed, away from the window: a long file takes tens of milliseconds.
+    _tracing: Option<Task<()>>,
     _subs: Vec<Subscription>,
 }
 
@@ -135,6 +139,7 @@ impl Files {
             outline: Outline::default(),
             marks: Rc::default(),
             naming: None,
+            _tracing: None,
             _subs: subs,
         };
         files.refresh(cx);
@@ -150,7 +155,7 @@ impl Files {
     }
 
     // Nests the outline of the active file, or of none, under its row, open down to the cursor's
-    // line; the same file again only follows the line.
+    // line once it is parsed; the same file again only follows the line.
     pub fn follow(
         &mut self,
         file: Option<&Path>,
@@ -166,12 +171,10 @@ impl Files {
         }
         self.outline = Outline {
             file: file.map(Path::to_path_buf),
+            line,
             ..Outline::default()
         };
         self.trace(window, cx);
-        if let Some(line) = line {
-            self.walk(line);
-        }
         self.refresh(cx);
     }
 
@@ -181,6 +184,7 @@ impl Files {
         if self.outline.file.as_deref() != Some(file) {
             return;
         }
+        self.outline.line = Some(line);
         if self.walk(line) {
             self.refresh(cx);
         } else {
@@ -188,26 +192,50 @@ impl Files {
         }
     }
 
-    // The file was written: its outline is read again, what was open stays open.
+    // The file was written: its outline is read again, what was open stays open. The last one
+    // shows until the new one comes.
     pub fn saved(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
         if self.outline.file.as_deref() == Some(path) {
             self.trace(window, cx);
-            self.refresh(cx);
         }
     }
 
+    // Reads the file now and parses it in the background; a parse still running for the file
+    // before is dropped.
     fn trace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._tracing = None;
         let Some(file) = self.outline.file.clone() else {
             self.outline.symbols.clear();
             return;
         };
-        self.outline.symbols = match self.bench.read(cx).outline(&file, Depth::Items) {
-            Ok(symbols) => gather_impls(symbols),
+        let outliner = match self.bench.read(cx).outliner(&file, Depth::Items) {
+            Ok(outliner) => outliner,
             Err(err) => {
                 notice::error(format!("{}: {err}", file.display()), window, cx);
-                Vec::new()
+                self.outline.symbols.clear();
+                return;
             }
         };
+        let parse = cx
+            .background_executor()
+            .spawn(async move { gather_impls(outliner.run()) });
+        self._tracing = Some(cx.spawn(async move |this, cx| {
+            let symbols = parse.await;
+            this.update(cx, |this, cx| this.traced(&file, symbols, cx))
+                .ok();
+        }));
+    }
+
+    // The outline of `file` came: it takes the place of the last one, open down to the cursor.
+    fn traced(&mut self, file: &Path, symbols: Vec<Symbol>, cx: &mut Context<Self>) {
+        if self.outline.file.as_deref() != Some(file) {
+            return;
+        }
+        self.outline.symbols = symbols;
+        if let Some(line) = self.outline.line {
+            self.walk(line);
+        }
+        self.refresh(cx);
     }
 
     // Takes the way to `line`, opening the rows on it that were not on the last one; tells

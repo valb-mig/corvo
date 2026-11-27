@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::port::{Depth, Fs, Syntax};
 use crate::{
@@ -16,9 +17,26 @@ pub struct Renamed {
     pub tabs: Vec<(PathBuf, PathBuf)>,
 }
 
+// A file read, waiting to be parsed into its outline; see `Workbench::outliner`.
+pub struct Outliner {
+    syntax: Arc<dyn Syntax + Send + Sync>,
+    lang: Lang,
+    text: Option<String>,
+    depth: Depth,
+}
+
+impl Outliner {
+    pub fn run(self) -> Vec<Symbol> {
+        match &self.text {
+            Some(text) => self.syntax.outline(self.lang, text, self.depth),
+            None => Vec::new(),
+        }
+    }
+}
+
 pub struct Workbench {
     fs: Box<dyn Fs>,
-    syntax: Box<dyn Syntax>,
+    syntax: Arc<dyn Syntax + Send + Sync>,
     trees: HashMap<PathBuf, Tree>,
     project: Option<PathBuf>,
     tabs: Tabs,
@@ -26,10 +44,10 @@ pub struct Workbench {
 }
 
 impl Workbench {
-    pub fn new(fs: Box<dyn Fs>, syntax: Box<dyn Syntax>) -> Self {
+    pub fn new(fs: Box<dyn Fs>, syntax: Box<dyn Syntax + Send + Sync>) -> Self {
         Self {
             fs,
-            syntax,
+            syntax: Arc::from(syntax),
             trees: HashMap::new(),
             project: None,
             tabs: Tabs::new(),
@@ -445,12 +463,25 @@ impl Workbench {
     }
 
     pub fn outline(&self, path: &Path, depth: Depth) -> io::Result<Vec<Symbol>> {
+        Ok(self.outliner(path, depth)?.run())
+    }
+
+    // The outline of a file to work out away from the workbench: the file is read now, and
+    // parsed when `run` is called, on any thread. A file in a language with no outline is not
+    // read, and gives none.
+    pub fn outliner(&self, path: &Path, depth: Depth) -> io::Result<Outliner> {
         let lang = Lang::of(path);
-        if !self.syntax.outlines(lang) {
-            return Ok(Vec::new());
-        }
-        let text = self.text(path)?;
-        Ok(self.syntax.outline(lang, &text, depth))
+        let text = if self.syntax.outlines(lang) {
+            Some(self.text(path)?)
+        } else {
+            None
+        };
+        Ok(Outliner {
+            syntax: self.syntax.clone(),
+            lang,
+            text,
+            depth,
+        })
     }
 
     pub fn excerpt(&self, path: &Path, first: u32, last: u32) -> io::Result<String> {
