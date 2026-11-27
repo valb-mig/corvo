@@ -39,6 +39,7 @@ impl Default for Keymap {
             Binding::new("ctrl-shift-g", Command::ShowGit, Scope::Global),
             Binding::new("ctrl-shift-c", Command::ShowChat, Scope::Global),
             Binding::new("ctrl-shift-j", Command::ShowTerminal, Scope::Global),
+            Binding::new("ctrl-shift-f", Command::FindInFiles, Scope::Global),
             Binding::new("ctrl-k", Command::OpenPalette, Scope::Global),
             Binding::new("escape", Command::Dismiss, Scope::Global),
             Binding::new("ctrl-b", Command::TogglePanel, Scope::Global),
@@ -48,6 +49,8 @@ impl Default for Keymap {
             Binding::new("delete", Command::RemovePicked, Scope::Workspaces),
             Binding::new("f2", Command::RenamePicked, Scope::Workspaces),
             Binding::new("ctrl-n", Command::NewWorkspace, Scope::Workspaces),
+            Binding::new("f2", Command::RenamePicked, Scope::Tree),
+            Binding::new("delete", Command::RemovePicked, Scope::Tree),
         ])
     }
 }

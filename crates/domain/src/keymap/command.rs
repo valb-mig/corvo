@@ -25,10 +25,14 @@ pub enum Command {
     PickNext,
     // Opens the workspace picked on the list.
     OpenPicked,
-    // Asks whether to remove the workspace picked on the list.
+    // Asks whether to remove the workspace picked on the list, or to send the file or folder
+    // picked in the file tree to the trash.
     RemovePicked,
-    // Turns the name of the workspace picked on the list into a field.
+    // Turns the name of the workspace picked on the list, or of the file or folder picked in the
+    // file tree, into a field.
     RenamePicked,
     // Puts the cursor in the field that adds a workspace.
     NewWorkspace,
+    // Brings the code over the home with its search through the project's files.
+    FindInFiles,
 }

@@ -102,3 +102,28 @@ fn the_workspace_list_has_its_own_keys() {
     assert_eq!(on_list("f2"), Some(Command::RenamePicked));
     assert_eq!(on_list("ctrl-n"), Some(Command::NewWorkspace));
 }
+
+#[test]
+fn ctrl_shift_f_searches_the_files_from_anywhere() {
+    let keymap = Keymap::default();
+    let find = keymap
+        .bindings()
+        .iter()
+        .find(|b| b.chord() == "ctrl-shift-f");
+    assert_eq!(find.map(Binding::command), Some(Command::FindInFiles));
+    assert_eq!(find.map(Binding::scope), Some(Scope::Global));
+}
+
+#[test]
+fn f2_and_delete_act_on_the_row_picked_in_the_file_tree() {
+    let keymap = Keymap::default();
+    let in_tree = |chord: &str| {
+        keymap
+            .bindings()
+            .iter()
+            .find(|b| b.chord() == chord && b.scope() == Scope::Tree)
+            .map(Binding::command)
+    };
+    assert_eq!(in_tree("f2"), Some(Command::RenamePicked));
+    assert_eq!(in_tree("delete"), Some(Command::RemovePicked));
+}

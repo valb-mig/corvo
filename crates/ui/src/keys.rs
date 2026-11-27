@@ -20,7 +20,8 @@ actions!(
         OpenPicked,
         RemovePicked,
         RenamePicked,
-        NewWorkspace
+        NewWorkspace,
+        FindInFiles
     ]
 );
 
@@ -63,6 +64,7 @@ fn action(command: Command) -> Box<dyn Action> {
         Command::RemovePicked => Box::new(RemovePicked),
         Command::RenamePicked => Box::new(RenamePicked),
         Command::NewWorkspace => Box::new(NewWorkspace),
+        Command::FindInFiles => Box::new(FindInFiles),
     }
 }
 
