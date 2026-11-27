@@ -7,7 +7,7 @@ use corvo_ui::titlebar::TitleBar;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::component::{IconName, WindowExt as _, v_flex};
 use gpui_kit::{
-    AnyElement, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
+    AnyElement, App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
     SharedString, Styled as _, Subscription, Window, div,
 };
 
@@ -130,28 +130,34 @@ impl Frame {
         });
     }
 
-    fn heading(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    // The name in the middle of the bar on top: the workspace's, or the app's on the home.
+    fn title(&self, cx: &App) -> SharedString {
         match &self.stage {
-            Stage::Home(_) => vec![div().child("corvo").into_any_element()],
-            Stage::Shell { id, .. } => {
-                let name = self
-                    .spaces
-                    .read(cx)
-                    .get(*id)
-                    .map(|space| space.name().to_owned())
-                    .unwrap_or_default();
-                let view = cx.entity().downgrade();
-                vec![
-                    Button::ghost("back")
-                        .icon(IconName::ChevronLeft)
-                        .on_click(move |_, window, cx| {
-                            view.update(cx, |frame, cx| frame.back(window, cx)).ok();
-                        })
-                        .into_any_element(),
-                    div().child(name).into_any_element(),
-                ]
-            }
+            Stage::Home(_) => "corvo".into(),
+            Stage::Shell { id, .. } => self
+                .spaces
+                .read(cx)
+                .get(*id)
+                .map(|space| space.name().to_owned())
+                .unwrap_or_default()
+                .into(),
         }
+    }
+
+    // The way back to the home, on the left of the bar while in a workspace.
+    fn heading(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let Stage::Shell { .. } = &self.stage else {
+            return None;
+        };
+        let view = cx.entity().downgrade();
+        Some(
+            Button::ghost("back")
+                .icon(IconName::ChevronLeft)
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |frame, cx| frame.back(window, cx)).ok();
+                })
+                .into_any_element(),
+        )
     }
 }
 
@@ -170,6 +176,7 @@ impl Render for Frame {
                     .on_close(move |window, cx| {
                         view.update(cx, |frame, cx| frame.close(window, cx)).ok();
                     })
+                    .title(self.title(cx))
                     .children(self.heading(cx)),
             )
             .child(div().flex_1().min_h_0().child(body))

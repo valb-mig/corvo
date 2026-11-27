@@ -2,17 +2,20 @@ use std::rc::Rc;
 
 use gpui_kit::component::{ActiveTheme as _, IconName, h_flex};
 use gpui_kit::{
-    AnyElement, App, InteractiveElement as _, IntoElement, MouseButton, ParentElement, RenderOnce,
-    StatefulInteractiveElement as _, Styled as _, Window, px,
+    AnyElement, App, FontWeight, InteractiveElement as _, IntoElement, MouseButton, ParentElement,
+    RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 
 use crate::button::Button;
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 
+// The bar on top of the window: what it holds on the left, its title in the middle, and the
+// window's buttons on the right.
 #[derive(IntoElement)]
 pub struct TitleBar {
     children: Vec<AnyElement>,
+    title: Option<SharedString>,
     on_close: Option<Handler>,
 }
 
@@ -20,8 +23,15 @@ impl TitleBar {
     pub fn new() -> Self {
         Self {
             children: Vec::new(),
+            title: None,
             on_close: None,
         }
+    }
+
+    // The words in the middle of the bar.
+    pub fn title(mut self, title: impl Into<SharedString>) -> Self {
+        self.title = Some(title.into());
+        self
     }
 
     pub fn on_close(mut self, f: impl Fn(&mut Window, &mut App) + 'static) -> Self {
@@ -50,7 +60,8 @@ impl RenderOnce for TitleBar {
         let up = pressed.clone();
         let close = self.on_close;
 
-        let mut buttons = h_flex().h_full().gap_1().px_2();
+        // The sides take the same room, so the title sits in the window's middle.
+        let mut buttons = h_flex().flex_1().h_full().justify_end().gap_1().px_2();
         if controls.minimize {
             buttons = buttons.child(
                 Button::ghost("window:minimize")
@@ -106,7 +117,22 @@ impl RenderOnce for TitleBar {
                     window.zoom_window();
                 }
             })
-            .child(h_flex().h_full().gap_2().px_2().children(self.children))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .gap_2()
+                    .px_2()
+                    .children(self.children),
+            )
+            .children(self.title.map(|title| {
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(title)
+            }))
             .child(buttons)
     }
 }
