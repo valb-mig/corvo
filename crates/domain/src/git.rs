@@ -45,12 +45,84 @@ impl Change {
     }
 }
 
-// A changed file, by its path in full, and where it came from when it was renamed.
+// A changed file, by its path in full, where it came from when it was renamed, and how its
+// change splits between the index and the work tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Changed {
     pub path: PathBuf,
     pub change: Change,
     pub from: Option<PathBuf>,
+    pub stage: Stage,
+}
+
+// Where a change sits: in the index, ready for the next commit, in the work tree only, or both
+// when part of it was staged. A conflict sits in neither until it is marked resolved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Stage {
+    // The index against the last commit.
+    pub index: Option<Change>,
+    // The work tree against the index.
+    pub tree: Option<Change>,
+}
+
+impl Stage {
+    pub fn staged(self) -> bool {
+        self.index.is_some()
+    }
+
+    pub fn unstaged(self) -> bool {
+        self.tree.is_some()
+    }
+}
+
+// How the branch checked out stands against the one it pushes to and pulls from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Sync {
+    // `origin/main`; none for a branch never pushed, or a detached head.
+    pub upstream: Option<String>,
+    // Commits here the upstream lacks, and there that this branch lacks.
+    pub ahead: usize,
+    pub behind: usize,
+}
+
+// Something git started and stopped half way, waiting on the dev: a merge, rebase, cherry-pick
+// or revert stopped on a conflict, or for its message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Doing {
+    // Merging what `theirs` names into the branch checked out.
+    Merge {
+        theirs: String,
+    },
+    // Putting the commits of `branch` on `onto`, at `step` of `steps`.
+    Rebase {
+        branch: String,
+        onto: String,
+        step: usize,
+        steps: usize,
+    },
+    CherryPick {
+        theirs: String,
+    },
+    Revert {
+        theirs: String,
+    },
+}
+
+impl Doing {
+    // What it is called in a sentence: "Merging", "Rebasing"…
+    pub fn verb(&self) -> &'static str {
+        match self {
+            Doing::Merge { .. } => "Merging",
+            Doing::Rebase { .. } => "Rebasing",
+            Doing::CherryPick { .. } => "Cherry-picking",
+            Doing::Revert { .. } => "Reverting",
+        }
+    }
+
+    // A rebase can skip the commit it stopped on; the others only go on or give up.
+    pub fn can_skip(&self) -> bool {
+        matches!(self, Doing::Rebase { .. } | Doing::CherryPick { .. })
+    }
 }
 
 // A file whose standing against the last commit changed between two reads of its repository,
@@ -68,7 +140,12 @@ pub struct Moved {
 pub struct Repo {
     root: PathBuf,
     branch: String,
+    // No branch is checked out; `branch` is the short commit.
+    detached: bool,
     head: Option<String>,
+    sync: Sync,
+    stashes: usize,
+    doing: Option<Doing>,
     changes: Vec<Changed>,
     // The change of each file, and the weightiest one under each folder up to the root.
     files: HashMap<PathBuf, Change>,
@@ -101,11 +178,66 @@ impl Repo {
         Self {
             root,
             branch: branch.into(),
+            detached: false,
             head,
+            sync: Sync::default(),
+            stashes: 0,
+            doing: None,
             changes,
             files,
             dirs,
         }
+    }
+
+    pub fn detached(mut self, detached: bool) -> Self {
+        self.detached = detached;
+        self
+    }
+
+    pub fn with_sync(mut self, sync: Sync) -> Self {
+        self.sync = sync;
+        self
+    }
+
+    pub fn with_stashes(mut self, stashes: usize) -> Self {
+        self.stashes = stashes;
+        self
+    }
+
+    pub fn with_doing(mut self, doing: Option<Doing>) -> Self {
+        self.doing = doing;
+        self
+    }
+
+    // The name of its folder, as the dev knows the project.
+    pub fn name(&self) -> String {
+        self.root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.root.display().to_string())
+    }
+
+    pub fn is_detached(&self) -> bool {
+        self.detached
+    }
+
+    pub fn sync(&self) -> &Sync {
+        &self.sync
+    }
+
+    pub fn stashes(&self) -> usize {
+        self.stashes
+    }
+
+    pub fn doing(&self) -> Option<&Doing> {
+        self.doing.as_ref()
+    }
+
+    // The files a merge, rebase or cherry-pick stopped on.
+    pub fn conflicts(&self) -> impl Iterator<Item = &Changed> {
+        self.changes
+            .iter()
+            .filter(|changed| changed.change == Change::Conflicted)
     }
 
     pub fn root(&self) -> &Path {
