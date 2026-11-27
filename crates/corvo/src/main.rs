@@ -27,6 +27,7 @@ fn main() -> anyhow::Result<()> {
         .run(move |cx| {
             gpui_kit::init(cx);
             corvo_ui::theme::apply(cx);
+            corvo_ui::editor::init();
             corvo_ui::keys::bind(&Keymap::default(), cx);
             pane::terminals::init(cx);
 
