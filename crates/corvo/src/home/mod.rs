@@ -405,7 +405,7 @@ impl Render for Home {
 }
 
 // A path with the home folder as `~`.
-fn tilde(path: &Path) -> String {
+pub(crate) fn tilde(path: &Path) -> String {
     if let Some(home) = std::env::home_dir()
         && let Ok(rest) = path.strip_prefix(&home)
     {

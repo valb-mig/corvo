@@ -121,7 +121,7 @@ impl Shell {
         let hub = cx.new(|_| hub);
         let bench = cx.new(|_| bench);
         let repos = cx.new(|_| Repos::new(Arc::new(GitCli)));
-        let home = cx.new(|cx| Overview::new(bench.clone(), registry, repos.clone(), cx));
+        let home = cx.new(|cx| Overview::new(bench.clone(), repos.clone(), cx));
         let code =
             cx.new(|cx| Code::new(bench.clone(), hub.clone(), home.clone(), repos.clone(), cx));
         let files = cx.new(|cx| Files::new(bench.clone(), repos.clone(), window, cx));
@@ -896,6 +896,11 @@ impl Shell {
             overview::Event::Arranged => self.arrange(window, cx),
             overview::Event::Open(path) => {
                 self.code.update(cx, |code, cx| code.open(path, window, cx));
+            }
+            overview::Event::Terminal(dir) => {
+                self.terminals
+                    .update(cx, |terminals, cx| terminals.open_in(dir, window, cx));
+                self.show_terminal(window, cx);
             }
         }
     }

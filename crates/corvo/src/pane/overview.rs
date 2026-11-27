@@ -1,20 +1,23 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use corvo_domain::server::Registry;
-use corvo_domain::{Atlas, Group, Item, Moved, Node, Pile, Place, Workbench, column, stack};
+use corvo_domain::{
+    Atlas, Group, Item, Moved, Node, Pile, Place, Weights, Workbench, bytes, column, owner, weigh,
+};
+use corvo_fs::LocalFs;
 use corvo_ui::file_icon::{FileIcon, FolderIcon};
 use corvo_ui::git::tint;
 use corvo_ui::graph::{self, Branch, Camera, Card, Graph};
-use corvo_ui::{field, notice};
+use corvo_ui::{field, notice, path};
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::Icon;
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, IntoElement, Render,
-    SharedString, Styled as _, Subscription, WeakEntity, Window,
+    App, AppContext as _, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, IntoElement,
+    Render, SharedString, Styled as _, Subscription, WeakEntity, Window,
 };
 
+use crate::home::tilde;
 use crate::repos::Repos;
 
 pub enum Event {
@@ -25,6 +28,8 @@ pub enum Event {
     Unlink(PathBuf),
     // A file's card was clicked: open its code.
     Open(PathBuf),
+    // Asked from a folder's menu: a terminal in it.
+    Terminal(PathBuf),
     // The home changed in a way worth keeping: what is open or hidden, a card moved, a group.
     Arranged,
 }
@@ -58,8 +63,12 @@ enum Act {
 // code. Cards are known by a key that holds between runs: a folder or file by its path.
 pub struct Overview {
     bench: Entity<Workbench>,
-    registry: Registry,
     repos: Entity<Repos>,
+    // How much the folders of each project hold, by project, read off the main thread; a project
+    // read again while it is being read is read once more after.
+    weights: HashMap<PathBuf, Weights>,
+    weighing: HashSet<PathBuf>,
+    again: HashSet<PathBuf>,
     camera: Camera,
     // Where the keys go while the home is in front, so Space held moves the graph.
     focus: FocusHandle,
@@ -74,16 +83,13 @@ pub struct Overview {
 impl EventEmitter<Event> for Overview {}
 
 impl Overview {
-    pub fn new(
-        bench: Entity<Workbench>,
-        registry: Registry,
-        repos: Entity<Repos>,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(bench: Entity<Workbench>, repos: Entity<Repos>, cx: &mut Context<Self>) -> Self {
         Self {
             bench,
-            registry,
             repos,
+            weights: HashMap::new(),
+            weighing: HashSet::new(),
+            again: HashSet::new(),
             camera: Camera::default(),
             focus: cx.focus_handle(),
             places: RefCell::default(),
@@ -100,6 +106,34 @@ impl Overview {
     pub fn chart(&mut self, projects: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
         let charted = self.bench.update(cx, |bench, _| bench.chart(projects));
         self.report(charted, window, cx);
+        self.weigh(projects.to_vec(), cx);
+    }
+
+    // Reads again how much the folders of these projects hold.
+    fn weigh(&mut self, projects: Vec<PathBuf>, cx: &mut Context<Self>) {
+        for project in projects {
+            if !self.weighing.insert(project.clone()) {
+                self.again.insert(project);
+                continue;
+            }
+            let root = project.clone();
+            let task = cx
+                .background_executor()
+                .spawn(async move { weigh(&LocalFs, &root) });
+            cx.spawn(async move |this, cx| {
+                let weights = task.await;
+                this.update(cx, |this, cx| {
+                    this.weighing.remove(&project);
+                    this.weights.insert(project.clone(), weights);
+                    if this.again.remove(&project) {
+                        this.weigh(vec![project], cx);
+                    }
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
     }
 
     // Files moved on disk: the folders above them are read again, and those down to a file
@@ -109,12 +143,34 @@ impl Overview {
         if opened {
             cx.emit(Event::Arranged);
         }
+        // The projects where files moved hold more or less now.
+        let projects = self.bench.read(cx).atlas().projects().to_vec();
+        let touched: Vec<PathBuf> = projects
+            .iter()
+            .filter(|project| moved.iter().any(|moved| moved.path.starts_with(project)))
+            .cloned()
+            .collect();
+        self.weigh(touched, cx);
         cx.notify();
     }
 
     pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let charted = self.bench.update(cx, |bench, _| bench.rechart());
         self.report(charted, window, cx);
+        let projects = self.bench.read(cx).atlas().projects().to_vec();
+        self.weigh(projects, cx);
+    }
+
+    // A folder's size, `…` while its project is being weighed for the first time, with a `+`
+    // when the look stopped short of all it holds.
+    fn size(&self, atlas: &Atlas, path: &Path) -> Option<SharedString> {
+        let project = owner(path, atlas.projects())?;
+        let Some(weights) = self.weights.get(project) else {
+            return self.weighing.contains(project).then(|| "…".into());
+        };
+        let weight = weights.of(path)?;
+        let more = if weight.whole { "" } else { "+" };
+        Some(format!("{}{more}", bytes(weight.bytes)).into())
     }
 
     // Every card back where the layout puts it, the whole graph centred in view; groups stay.
@@ -397,22 +453,23 @@ impl Overview {
             card = card.tint(tint(change, cx), !node.is_dir());
         }
         if node.is_dir() {
-            card = card.icon(move |size| FolderIcon::new(name.clone()).open(open).size(size));
+            card = card
+                .icon(move |size| FolderIcon::new(name.clone()).open(open).size(size))
+                .folder(whereabouts(atlas, path), self.size(atlas, path));
             if let Some(children) = atlas.children(path) {
                 card = card.meta(summary(children));
-                if let Some(stack) = stack(children, &self.registry) {
-                    card = card.badge(stack.to_owned());
-                }
             }
+            card = folder_menu(card, atlas, path, view);
         } else {
             // A click opens the file's code.
-            let (opener, path) = (view.clone(), path.to_path_buf());
+            let (opener, file) = (view.clone(), path.to_path_buf());
             let card = card
                 .icon(move |size| FileIcon::new(name.clone()).size(size))
                 .on_click(move |_, cx| {
-                    let path = path.clone();
-                    opener.update(cx, |_, cx| cx.emit(Event::Open(path))).ok();
+                    let file = file.clone();
+                    opener.update(cx, |_, cx| cx.emit(Event::Open(file))).ok();
                 });
+            let card = file_menu(card, atlas, path);
             return self.grouped(card, atlas, view);
         }
         clicks(self.grouped(card, atlas, view), act, view)
@@ -563,6 +620,80 @@ fn note(under: &Path, text: &str) -> Branch {
         .muted(true)
         .selectable(false);
     Branch::new(card)
+}
+
+// How many characters of a path a folder's card shows.
+const PATH: usize = 30;
+
+// Where a folder is, as its card shows it: a project by its whole path, any other folder from
+// its project's name down, cut at the front when too long.
+fn whereabouts(atlas: &Atlas, path: &Path) -> String {
+    let shown = match owner(path, atlas.projects()) {
+        Some(project) if project != path => {
+            let name = project
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let rest = path.strip_prefix(project).unwrap_or(path);
+            format!("{name}/{}", rest.display())
+        }
+        _ => tilde(path),
+    };
+    path::tail(&shown, PATH)
+}
+
+// The path from the project down, none for the project itself.
+fn relative(atlas: &Atlas, path: &Path) -> Option<String> {
+    let project = owner(path, atlas.projects())?;
+    let rest = path.strip_prefix(project).ok()?;
+    (!rest.as_os_str().is_empty()).then(|| rest.display().to_string())
+}
+
+// What a right click on a folder offers before hiding it: its path, the folder in the file
+// manager, and a terminal in it.
+fn folder_menu(card: Card, atlas: &Atlas, path: &Path, view: &WeakEntity<Overview>) -> Card {
+    let (shown, inside) = (path.to_path_buf(), path.to_path_buf());
+    let view = view.clone();
+    copies(card, atlas, path)
+        .action("Open in file manager", Glyph::FolderOpen, move |_, cx| {
+            cx.open_with_system(&shown);
+        })
+        .action("Open terminal here", Glyph::SquareTerminal, move |_, cx| {
+            let inside = inside.clone();
+            view.update(cx, |_, cx| cx.emit(Event::Terminal(inside)))
+                .ok();
+        })
+        .separator()
+}
+
+// What a right click on a file offers before hiding it: its path, and its folder in the file
+// manager with it picked there.
+fn file_menu(card: Card, atlas: &Atlas, path: &Path) -> Card {
+    let file = path.to_path_buf();
+    copies(card, atlas, path)
+        .action("Open containing folder", Glyph::FolderOpen, move |_, cx| {
+            cx.reveal_path(&file);
+        })
+        .separator()
+}
+
+// The path in full, and from the project down when it is inside one.
+fn copies(card: Card, atlas: &Atlas, path: &Path) -> Card {
+    let full = path.display().to_string();
+    let card = card.action("Copy path", Glyph::Copy, move |window, cx| {
+        copy(&full, window, cx);
+    });
+    match relative(atlas, path) {
+        Some(rest) => card.action("Copy relative path", Glyph::Copy, move |window, cx| {
+            copy(&rest, window, cx);
+        }),
+        None => card,
+    }
+}
+
+fn copy(text: &str, window: &mut Window, cx: &mut App) {
+    cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
+    notice::info(format!("Copied {text}"), window, cx);
 }
 
 fn summary(children: &[Node]) -> String {

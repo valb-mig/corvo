@@ -141,6 +141,12 @@ impl Terminals {
         self.focus(window, cx);
     }
 
+    // A terminal of its own in a folder, as a folder's card on the home asks.
+    pub fn open_in(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.open(Some(dir.to_path_buf()), None, window, cx);
+        self.focus(window, cx);
+    }
+
     // Runs a script in a terminal of its own, named after it, in the project it belongs to. One
     // that needs arguments is left typed for the dev to finish.
     pub fn run(
