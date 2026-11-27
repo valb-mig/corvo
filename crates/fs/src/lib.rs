@@ -69,4 +69,8 @@ impl Fs for LocalFs {
     fn write(&self, path: &Path, text: &str) -> io::Result<()> {
         std::fs::write(path, text)
     }
+
+    fn size(&self, path: &Path) -> io::Result<u64> {
+        Ok(std::fs::metadata(path)?.len())
+    }
 }

@@ -18,6 +18,7 @@ mod scripts;
 mod symbol;
 mod tabs;
 mod tree;
+mod weight;
 mod workbench;
 mod workspace;
 
@@ -48,5 +49,6 @@ pub use symbol::{Kind as SymbolKind, Symbol, gather_impls, path_to};
 pub use tabs::Tabs;
 pub use tree::Tree;
 pub use uuid::Uuid;
+pub use weight::{Weight, Weights, bytes, weigh};
 pub use workbench::Workbench;
 pub use workspace::{Workspace, Workspaces, owner};
