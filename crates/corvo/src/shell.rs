@@ -16,15 +16,15 @@ use corvo_ui::keys::{
     Dismiss, OpenPalette, Save, ShowChat, ShowCode, ShowGit, ShowTerminal, TogglePanel,
 };
 use corvo_ui::language_icon::LanguageIcon;
-use corvo_ui::notice;
 use corvo_ui::statusbar::{Action, Popup, StatusBar};
 use corvo_ui::window_bar::{PaletteField, WindowBar};
+use corvo_ui::{motion, notice};
 use futures::StreamExt as _;
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, ElementId, Entity, FocusHandle,
+    AnimationExt as _, AnyElement, App, AppContext as _, Context, ElementId, Entity, FocusHandle,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, PathPromptOptions,
     Render, Styled as _, Subscription, Window, div, px,
 };
@@ -47,6 +47,13 @@ use crate::repos::{self, Repos};
 // How often git is read again while the window is in front, for what the agent or a terminal
 // changed.
 const POLL: Duration = Duration::from_secs(3);
+
+// The room above and below a window over the home, and above its palette, under the bar.
+const GAP: f32 = 32.;
+const UNDER_BAR: f32 = 40.;
+// How far a window rises into place as it opens, and its palette drops.
+const RISE: f32 = 12.;
+const DROP: f32 = 8.;
 
 pub struct Shell {
     focus: FocusHandle,
@@ -1059,7 +1066,9 @@ impl Shell {
     // A window over the home, which steps back behind a dimmed layer: its bar along the top, with
     // the field of its palette in the middle, and what it holds under it; the palette, while open,
     // under the bar with what it offers. Esc, the bar's × or a click on the dimmed home puts the
-    // window away.
+    // window away. Opening, the home dims and the window rises a little into place, fading in;
+    // the dimmed layer is the same for every window, so going from one to another only brings the
+    // new one in.
     fn window(
         &self,
         id: &'static str,
@@ -1079,7 +1088,7 @@ impl Shell {
                 .ok();
         });
         let scrim = div()
-            .id(ElementId::Name(format!("{id}-scrim").into()))
+            .id("window-scrim")
             .absolute()
             .top_0()
             .left_0()
@@ -1088,6 +1097,9 @@ impl Shell {
             .bg(theme.background.opacity(0.75))
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 dimmed.update(cx, |shell, cx| close(shell, window, cx)).ok();
+            })
+            .with_animation("window-dim", motion::opening(), |scrim, delta| {
+                scrim.opacity(delta)
             });
         let bar = bar.center(field).on_close(move |window, cx| {
             closer.update(cx, |shell, cx| close(shell, window, cx)).ok();
@@ -1095,8 +1107,8 @@ impl Shell {
         let panel = v_flex()
             .id(id)
             .absolute()
-            .top(px(32.))
-            .bottom(px(32.))
+            .top(px(GAP))
+            .bottom(px(GAP))
             .left(px(48.))
             .right(px(48.))
             .occlude()
@@ -1107,7 +1119,20 @@ impl Shell {
             .bg(theme.background)
             .child(bar)
             .child(div().flex_1().min_h_0().child(body))
-            .children(palette);
+            .children(palette)
+            // Top and bottom move together, so what the window holds keeps its size: a terminal
+            // is not resized on every frame.
+            .with_animation(
+                ElementId::Name(format!("{id}-rise").into()),
+                motion::opening(),
+                |panel, delta| {
+                    let rise = RISE * (1. - delta);
+                    panel
+                        .top(px(GAP + rise))
+                        .bottom(px(GAP - rise))
+                        .opacity(delta)
+                },
+            );
         div()
             .absolute()
             .top_0()
@@ -1118,7 +1143,8 @@ impl Shell {
     }
 
     // The palette under the bar: a search over what the window offers, the arrows and Enter or a
-    // click to pick. A click anywhere else closes it.
+    // click to pick. A click anywhere else closes it. It drops a little into place as it opens,
+    // fading in.
     fn palette(
         &self,
         placeholder: &'static str,
@@ -1173,7 +1199,7 @@ impl Shell {
             });
         let panel = div()
             .absolute()
-            .top(px(40.))
+            .top(px(UNDER_BAR))
             .left_0()
             .right_0()
             .flex()
@@ -1188,7 +1214,12 @@ impl Shell {
                     .shadow_lg()
                     .overflow_hidden()
                     .child(command),
-            );
+            )
+            .with_animation("palette-drop", motion::opening(), |panel, delta| {
+                panel
+                    .top(px(UNDER_BAR - DROP * (1. - delta)))
+                    .opacity(delta)
+            });
         div()
             .absolute()
             .top_0()
