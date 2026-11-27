@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -47,10 +48,80 @@ impl Offer {
 
 // Whether every word of the query is in the text, in any case.
 pub fn finds(query: &str, text: &str) -> bool {
-    let text = text.to_lowercase();
-    query
-        .split_whitespace()
-        .all(|word| text.contains(&word.to_lowercase()))
+    has(&words(query), &text.to_lowercase())
+}
+
+// The words of a query, lowercased once for all the texts they are looked for in.
+fn words(query: &str) -> Vec<String> {
+    query.split_whitespace().map(str::to_lowercase).collect()
+}
+
+// Whether every word is in the text, already lowercased.
+fn has(words: &[String], lower: &str) -> bool {
+    words.iter().all(|word| lower.contains(word.as_str()))
+}
+
+// A file of a project for the code's palette, with its path inside the project as the palette
+// shows it and as it searches it; made once, when the files of the project are walked.
+pub struct Listed {
+    path: PathBuf,
+    shown: String,
+    lower: String,
+}
+
+impl Listed {
+    pub fn new(root: &Path, path: PathBuf) -> Self {
+        let shown = inside(Some(root), &path);
+        let lower = shown.to_lowercase();
+        Self { path, shown, lower }
+    }
+}
+
+// The files of a project a query finds, by where they are in the list, leaving out the open
+// ones. A project can have thousands, so what the last query found is kept while the query, the
+// files and the open tabs stay the same: drawing the palette again does not search again.
+#[derive(Default)]
+pub struct Search {
+    last: RefCell<Option<Found>>,
+}
+
+struct Found {
+    query: String,
+    files: Rc<Vec<Listed>>,
+    open: Vec<PathBuf>,
+    rows: Rc<[usize]>,
+}
+
+impl Search {
+    pub fn found(&self, files: &Rc<Vec<Listed>>, query: &str, open: &[&Path]) -> Rc<[usize]> {
+        let mut last = self.last.borrow_mut();
+        if let Some(found) = last.as_ref()
+            && found.query == query
+            && Rc::ptr_eq(&found.files, files)
+            && found
+                .open
+                .iter()
+                .map(PathBuf::as_path)
+                .eq(open.iter().copied())
+        {
+            return found.rows.clone();
+        }
+        let words = words(query);
+        let rows: Rc<[usize]> = files
+            .iter()
+            .enumerate()
+            .filter(|(_, file)| !open.contains(&file.path.as_path()) && has(&words, &file.lower))
+            .map(|(row, _)| row)
+            .take(SHOWN)
+            .collect();
+        *last = Some(Found {
+            query: query.to_owned(),
+            files: files.clone(),
+            open: open.iter().map(|path| path.to_path_buf()).collect(),
+            rows: rows.clone(),
+        });
+        rows
+    }
 }
 
 // The chat window's: a new chat, then the chats, newest first, found by title and messages.
@@ -100,23 +171,20 @@ pub fn chats(
 pub fn code(
     code: &Entity<Code>,
     bench: &Entity<Workbench>,
-    files: &[PathBuf],
+    files: &Rc<Vec<Listed>>,
+    search: &Search,
     query: &str,
     cx: &App,
 ) -> Vec<Offer> {
     let bench = bench.read(cx);
     let root = bench.project();
     let open: Vec<&Path> = bench.tabs().docs().iter().map(Doc::path).collect();
-    let offer = |path: &Path, open: bool| {
-        let shown = inside(root, path);
-        if !finds(query, &shown) {
-            return None;
-        }
+    let offer = |path: &Path, shown: &str, open: bool| {
         let name = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let dir = Path::new(&shown)
+        let dir = Path::new(shown)
             .parent()
             .map(|dir| dir.display().to_string())
             .unwrap_or_default();
@@ -129,14 +197,17 @@ pub fn code(
         let offer = Offer::new(Glyph::FileText, name, move |window, cx| {
             code.update(cx, |code, cx| code.open(&path, window, cx));
         });
-        Some(offer.detail(detail))
+        offer.detail(detail)
     };
-    let tabs = open.iter().filter_map(|path| offer(path, true));
-    let rest = files
-        .iter()
-        .filter(|path| !open.contains(&path.as_path()))
-        .filter_map(|path| offer(path, false))
-        .take(SHOWN);
+    let tabs = open.iter().filter_map(|path| {
+        let shown = inside(root, path);
+        finds(query, &shown).then(|| offer(path, &shown, true))
+    });
+    let rows = search.found(files, query, &open);
+    let rest = rows.iter().map(|row| {
+        let file = &files[*row];
+        offer(&file.path, &file.shown, false)
+    });
     tabs.chain(rest).collect()
 }
 
@@ -225,12 +296,56 @@ fn inside(root: Option<&Path>, path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::finds;
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
+
+    use super::{Listed, Search, finds};
+
+    fn project(paths: &[&str]) -> Rc<Vec<Listed>> {
+        let root = Path::new("/p");
+        Rc::new(
+            paths
+                .iter()
+                .map(|path| Listed::new(root, root.join(path)))
+                .collect(),
+        )
+    }
 
     #[test]
     fn finds_every_word_in_any_case() {
         assert!(finds("", "anything"));
         assert!(finds("pane code", "crates/corvo/src/pane/Code.rs"));
         assert!(!finds("pane chat", "crates/corvo/src/pane/code.rs"));
+    }
+
+    #[test]
+    fn a_search_finds_files_by_their_path_in_the_project_leaving_out_the_open_ones() {
+        let files = project(&["src/Main.rs", "src/pane/code.rs", "docs/code.md"]);
+        let open = PathBuf::from("/p/docs/code.md");
+
+        let rows = Search::default().found(&files, "CODE", &[open.as_path()]);
+
+        assert_eq!(&*rows, [1]);
+        // The project's own folder is not part of what is searched.
+        assert!(Search::default().found(&files, "p/src", &[]).is_empty());
+    }
+
+    #[test]
+    fn a_search_runs_again_only_when_the_query_files_or_tabs_change() {
+        let files = project(&["src/main.rs", "src/lib.rs"]);
+        let search = Search::default();
+
+        let first = search.found(&files, "src", &[]);
+        assert!(Rc::ptr_eq(&first, &search.found(&files, "src", &[])));
+
+        let narrower = search.found(&files, "src lib", &[]);
+        assert_eq!(&*narrower, [1]);
+        let lib = PathBuf::from("/p/src/lib.rs");
+        assert!(search.found(&files, "src lib", &[lib.as_path()]).is_empty());
+        let walked_again = project(&["src/main.rs", "src/lib.rs"]);
+        assert!(!Rc::ptr_eq(
+            &first,
+            &search.found(&walked_again, "src", &[])
+        ));
     }
 }

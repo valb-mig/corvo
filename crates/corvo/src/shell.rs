@@ -31,7 +31,7 @@ use gpui_kit::{
 use lsp_types::Position;
 
 use crate::agents::{self, Agents};
-use crate::palette::{self, Offer};
+use crate::palette::{self, Listed, Offer, Search};
 use crate::pane::chats::{self, ChatWindow};
 use crate::pane::code::{self, Code};
 use crate::pane::dock::{self, Dock, Project};
@@ -95,7 +95,8 @@ pub struct Shell {
     palette: Entity<CommandState>,
     paletting: bool,
     before: Option<FocusHandle>,
-    index: HashMap<PathBuf, Rc<Vec<PathBuf>>>,
+    index: HashMap<PathBuf, Rc<Vec<Listed>>>,
+    search: Search,
     // The panel floating on the right of the code, with the file tree: opened and closed with
     // ctrl-b or the button of the window's bar.
     panel: bool,
@@ -280,6 +281,7 @@ impl Shell {
             paletting: false,
             before: None,
             index: HashMap::new(),
+            search: Search::default(),
             panel: false,
             _subs: subs,
         };
@@ -574,7 +576,14 @@ impl Shell {
         self.index.insert(root.clone(), Rc::default());
         let task = cx.background_executor().spawn({
             let root = root.clone();
-            async move { corvo_fs::files(&root, MOST) }
+            // Each path as the palette shows and searches it, made here rather than on each
+            // key typed.
+            async move {
+                corvo_fs::files(&root, MOST)
+                    .into_iter()
+                    .map(|path| Listed::new(&root, path))
+                    .collect::<Vec<_>>()
+            }
         });
         cx.spawn(async move |this, cx| {
             let files = task.await;
@@ -1001,7 +1010,7 @@ impl Shell {
                 .and_then(|root| self.index.get(root))
                 .cloned()
                 .unwrap_or_default();
-            palette::code(&self.code, &self.bench, &files, &query, cx)
+            palette::code(&self.code, &self.bench, &files, &self.search, &query, cx)
         });
         let ask = ("Open a file", offers);
         self.window("code", bar, body.into_any_element(), ask, Self::dismiss, cx)
