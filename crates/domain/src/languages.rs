@@ -14,6 +14,10 @@ pub struct Share {
 }
 
 impl Share {
+    pub(crate) fn new(name: &'static str, files: usize) -> Self {
+        Self { name, files }
+    }
+
     pub fn name(&self) -> &'static str {
         self.name
     }
@@ -63,10 +67,22 @@ pub fn language(name: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
+// The languages of a project, and whether all of its files were counted: a huge one is counted
+// only as far as `scan` looks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Census {
+    pub shares: Vec<Share>,
+    pub whole: bool,
+}
+
 // Most files first; a tie goes by name.
 pub fn languages(fs: &dyn Fs, root: &Path) -> Vec<Share> {
+    census(fs, root).shares
+}
+
+pub fn census(fs: &dyn Fs, root: &Path) -> Census {
     let mut counts: HashMap<usize, usize> = HashMap::new();
-    scan::files(fs, root, |node| {
+    let whole = scan::files(fs, root, |node| {
         let Some((_, ext)) = node.name().rsplit_once('.') else {
             return;
         };
@@ -86,5 +102,5 @@ pub fn languages(fs: &dyn Fs, root: &Path) -> Vec<Share> {
         })
         .collect();
     shares.sort_by(|a, b| b.files.cmp(&a.files).then(a.name.cmp(b.name)));
-    shares
+    Census { shares, whole }
 }

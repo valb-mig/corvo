@@ -9,7 +9,7 @@ use crate::port::Fs;
 const ENTRIES: usize = 8000;
 const DEPTH: usize = 12;
 
-const SKIP: &[&str] = &[
+pub(crate) const SKIP: &[&str] = &[
     "node_modules",
     "target",
     "vendor",
@@ -23,7 +23,8 @@ const SKIP: &[&str] = &[
     ".git",
 ];
 
-pub fn files(fs: &dyn Fs, root: &Path, mut visit: impl FnMut(&Node)) {
+// Tells whether every entry was looked at, false when it stopped at ENTRIES.
+pub fn files(fs: &dyn Fs, root: &Path, mut visit: impl FnMut(&Node)) -> bool {
     let mut stack = vec![(root.to_path_buf(), 0)];
     let mut seen = 0;
     while let Some((dir, depth)) = stack.pop() {
@@ -33,7 +34,7 @@ pub fn files(fs: &dyn Fs, root: &Path, mut visit: impl FnMut(&Node)) {
         for node in nodes {
             seen += 1;
             if seen > ENTRIES {
-                return;
+                return false;
             }
             if !node.is_dir() {
                 visit(&node);
@@ -42,4 +43,5 @@ pub fn files(fs: &dyn Fs, root: &Path, mut visit: impl FnMut(&Node)) {
             }
         }
     }
+    true
 }
