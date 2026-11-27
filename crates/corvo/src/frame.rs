@@ -11,7 +11,7 @@ use gpui_kit::{
     SharedString, Styled as _, Subscription, Window, div,
 };
 
-use crate::home::{self, Home};
+use crate::home::{self, Facts, Home};
 use crate::shell::Shell;
 
 enum Stage {
@@ -21,6 +21,8 @@ enum Stage {
 
 pub struct Frame {
     spaces: Entity<Workspaces>,
+    // What the list of workspaces read of the projects, kept for when it comes back.
+    facts: Entity<Facts>,
     stage: Stage,
     _subs: Vec<Subscription>,
 }
@@ -28,10 +30,12 @@ pub struct Frame {
 impl Frame {
     pub fn new(spaces: Workspaces, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let spaces = cx.new(|_| spaces);
-        let home = cx.new(|cx| Home::new(spaces.clone(), window, cx));
+        let facts = cx.new(|_| Facts::new());
+        let home = cx.new(|cx| Home::new(spaces.clone(), facts.clone(), window, cx));
         let subs = vec![cx.subscribe_in(&home, window, Self::on_home)];
         Self {
             spaces,
+            facts,
             stage: Stage::Home(home),
             _subs: subs,
         }
@@ -63,7 +67,7 @@ impl Frame {
     }
 
     fn home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let home = cx.new(|cx| Home::new(self.spaces.clone(), window, cx));
+        let home = cx.new(|cx| Home::new(self.spaces.clone(), self.facts.clone(), window, cx));
         self._subs = vec![cx.subscribe_in(&home, window, Self::on_home)];
         self.stage = Stage::Home(home);
         cx.notify();

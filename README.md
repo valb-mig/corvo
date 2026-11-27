@@ -10,7 +10,15 @@ cargo run
 
 ## Workspaces
 
-corvo opens on the list of workspaces, where you add, remove or enter one. A workspace links any number of project folders, none required.
+corvo opens on the list of workspaces. A workspace links any number of project folders, none required.
+
+The workspaces stand down the left, each with how many projects it links and the logos of the three languages with the most files across them; the field at the bottom adds one. A click or `↑`/`↓` picks a workspace and shows it on the right; `Enter`, its **Open** or a double click opens it. The one picked last is picked again the next time the list comes up, and with none yet the cursor waits in the field.
+
+On the right, the workspace picked shows its projects, two to a row, each card with its folder, its stack badge, the share of each language in a bar and a legend, its branch with how many files changed in its repository, and how many files of code were counted, with a `+` when the project is too big to look all over (the count stops after 8000 entries, as the status bar's does). The line under the name sums them up: the projects, their stacks, and the files changed. A click on a card, which says so while the mouse is on it, opens the workspace with only that project on its home, isolated. The last card links a folder. A project whose folder is gone says so, with **Locate…** to point it at where it went (it keeps its place among the others) and **Unlink**.
+
+The stack badge is the project's marker (see Home); a project with none of its own, as a monorepo, gets one badge for each folder right under it that has one (`engine/ Python`, `web/ Node`). The languages are counted in the background, as the status bar counts them, for every project when the list comes up, and kept while the window is open, so going back to the list counts nothing again; the branches are read again for the workspace picked each time it is picked.
+
+**Rename**, `F2` or a double click on the name turns it into a field: `Enter` or clicking away keeps it, `Escape` leaves it as it was, and a blank name changes nothing. **Remove** or `Delete` asks first, telling how many chats go with the workspace; `Enter` or **Remove** removes it, `Escape` or **Cancel** keeps it. The project folders are never touched.
 
 Inside a workspace the window holds its home. The code comes over it, with the home dimmed behind: the open files in tabs, and a panel floating on their right, over the editor rather than beside it, with the file tree of a project (the one open in the home, or the one the active tab belongs to), the active file's outline nested under its row (see Outline). `ctrl-b` or the panel button of the window's bar opens and closes it. A click on a file's card in the home opens it there, and so does a file picked in the tree; **×**, `Escape` or a click on the dimmed home puts the code away, its tabs kept for the next time. Closing the last tab leaves the code open, empty, with the tree open to pick a file. The code, like the chat and git windows, has a bar along its top with its name, the button of its panel, `Esc` and a **×**, and in its middle the field of the window's palette: click it or press `ctrl-k`, type, and pick with the arrows and `Enter` or a click (`Esc` or a click elsewhere closes it). The code's palette opens a file: the open ones first, then those of the project in front, by their path in it, leaving out what git ignores. Projects are linked and unlinked from the home: the **Link folder…** button of the status bar links one, and right clicking a project card gives **Unlink**. Open tabs belong to the workspace, so switching projects only changes the tree.
 
@@ -24,7 +32,7 @@ Files carry the icons of edit.r in the tree and the tabs: a seal in the tone of 
 
 Any file opens in a tab of the code: text goes to the editor, images (png, jpg, webp, gif, svg, bmp, tiff, ico) render in a viewer, and other binary files show their size and a notice.
 
-Workspaces are saved to `$XDG_CONFIG_HOME/corvo/workspaces.json` (`~/.config/corvo/workspaces.json` by default), each with how its home was left (see Home).
+Workspaces are saved to `$XDG_CONFIG_HOME/corvo/workspaces.json` (`~/.config/corvo/workspaces.json` by default), each with how its home was left (see Home), along with the one picked last on the list.
 
 ## Home
 
@@ -73,6 +81,11 @@ The outline comes from tree-sitter (`crates/syntax`), with no language server ne
 | `escape`       | Close the palette, or put the window away | global |
 | `ctrl-b`       | Open or close the window's panel          | global |
 | `space` (held) | Drag to move the graph instead of picking | home   |
+| `up` / `down`  | Pick the workspace above or below         | list   |
+| `enter`        | Open the workspace picked                 | list   |
+| `delete`       | Remove the workspace picked (asks first)  | list   |
+| `f2`           | Rename the workspace picked               | list   |
+| `ctrl-n`       | Put the cursor in the new workspace field | list   |
 
 `ctrl-click` also goes to definition. Bindings live in `corvo_domain::keymap::Keymap` and reach GPUI through `corvo_ui::keys`.
 
