@@ -48,6 +48,8 @@ pub const UNDER: f32 = 6.;
 
 const ICON: f32 = 16.;
 const STEP: f32 = 1.2;
+// How far past the viewport cards are still drawn, in pixels, so those scrolling in are there.
+pub const AROUND: f32 = 240.;
 // How far the wheel goes to turn a pile by one: a notch of a mouse wheel.
 const TURN: f32 = 48.;
 
@@ -872,21 +874,42 @@ impl Camera {
         self.lens.borrow_mut().fit = true;
     }
 
-    // Records the viewport, gliding to fit the graph in it when asked; true when the camera
-    // moved.
-    fn frame(&self, bounds: Bounds<Pixels>) -> bool {
+    // Records the viewport, gliding to fit the graph in it when asked: whether the camera moved,
+    // and whether the viewport changed size, so other cards are in sight.
+    fn frame(&self, bounds: Bounds<Pixels>) -> (bool, bool) {
         let mut lens = self.lens.borrow_mut();
+        let resized = lens.bounds.size != bounds.size;
         lens.bounds = bounds;
         let viewport = (f32::from(bounds.size.width), f32::from(bounds.size.height));
         if !lens.fit || viewport.0 <= 0. || viewport.1 <= 0. {
-            return false;
+            return (false, resized);
         }
         let (zoom, offset) = fit(lens.extent, viewport);
         let center = View::new(zoom).under(lens.middle(), offset);
         lens.head(Sight { zoom, center });
         lens.fit = false;
-        true
+        (true, resized)
     }
+
+    // The part of the graph in sight, in graph space, with room around it for what scrolls or
+    // glides in next; none before the viewport is known, when everything is in sight.
+    fn in_sight(&self) -> Option<Rect> {
+        let lens = self.lens.borrow();
+        let size = lens.bounds.size;
+        let viewport = (f32::from(size.width), f32::from(size.height));
+        sight(View::new(lens.zoom), lens.offset, viewport)
+    }
+}
+
+// The part of the graph a viewport of the given size shows, scrolled by `offset`, in graph space
+// and with AROUND pixels of room on every side; none for an empty viewport.
+pub fn sight(view: View, offset: (f32, f32), (width, height): (f32, f32)) -> Option<Rect> {
+    if width <= 0. || height <= 0. {
+        return None;
+    }
+    let (left, top) = view.under((-AROUND, -AROUND), offset);
+    let (right, bottom) = view.under((width + AROUND, height + AROUND), offset);
+    Some((left, top, right - left, bottom - top))
 }
 
 fn apart(start: Point<Pixels>, at: Point<Pixels>) -> (f32, f32) {
@@ -1042,6 +1065,21 @@ struct Edge {
     stroke: Stroke,
     // Fading in with the card it goes to.
     alpha: f32,
+}
+
+// The two points a curve from `from` to `to` bends toward, leaving its card and coming into the
+// next.
+fn bends(from: (f32, f32), to: (f32, f32)) -> ((f32, f32), (f32, f32)) {
+    let bend = ((to.0 - from.0) / 2.).max(SPAN / 2.);
+    ((from.0 + bend, from.1), (to.0 - bend, to.1))
+}
+
+// The box a curve from `from` to `to` stays in: that of its ends and the points it bends toward,
+// which go past the ends when the cards are close.
+pub fn reach(from: (f32, f32), to: (f32, f32)) -> Rect {
+    let (a, b) = bends(from, to);
+    let corners = [from, to, a, b].map(|(x, y)| (x, y, 0., 0.));
+    hull(corners).unwrap_or_default()
 }
 
 #[derive(IntoElement)]
@@ -1291,6 +1329,11 @@ impl RenderOnce for Graph {
             window.request_animation_frame();
         }
 
+        // Only what is in sight is drawn: with many folders open, most of the graph is not.
+        let sight = camera.in_sight();
+        let seen = |rect: Rect| sight.is_none_or(|sight| touches(sight, rect));
+        edges.retain(|edge| seen(reach(edge.from, edge.to)));
+
         let hands = Hands {
             camera: camera.clone(),
             group: self.on_group,
@@ -1298,7 +1341,7 @@ impl RenderOnce for Graph {
         };
         let mut cards = Vec::new();
         for ((mut card, out), alpha) in placed.into_iter().zip(tucked).zip(alphas) {
-            if out.is_some() {
+            if out.is_some() || !seen((card.at.0, card.at.1, card.size.0, card.size.1)) {
                 continue;
             }
             let (x, y) = view.at(card.at);
@@ -1340,6 +1383,9 @@ impl RenderOnce for Graph {
             ));
         }
         for (group, (at, alpha), movers, count) in stands {
+            if !seen((at.0, at.1, WIDTH, HEIGHT)) {
+                continue;
+            }
             let (x, y) = view.at(at);
             let frame = (x, y, WIDTH * zoom, HEIGHT * zoom);
             let card = group.stand_in(count);
@@ -1419,7 +1465,7 @@ impl RenderOnce for Graph {
             .children(pick);
 
         let untangle = self.on_reorganize.filter(|_| !nudges.is_empty());
-        let (down, moved, up, seen) = (
+        let (down, moved, up, framed) = (
             camera.clone(),
             camera.clone(),
             camera.clone(),
@@ -1485,8 +1531,13 @@ impl RenderOnce for Graph {
                 canvas(
                     |_, _, _| (),
                     move |bounds, _, window, _| {
-                        if seen.frame(bounds) {
+                        let (moved, resized) = framed.frame(bounds);
+                        if moved {
                             window.refresh();
+                        }
+                        // Drawn again for the cards a viewport of another size brings in sight.
+                        if resized {
+                            window.request_animation_frame();
                         }
                     },
                 )
@@ -1673,14 +1724,14 @@ fn paint(
     };
     for edge in edges {
         let (from, to) = (edge.from, edge.to);
-        let bend = ((to.0 - from.0) / 2.).max(SPAN / 2.);
+        let (a, b) = bends(from, to);
         let (width, color) = match edge.stroke {
             Stroke::Tree => (1., line),
             Stroke::Lit => (1.5, lit),
         };
         let mut path = PathBuilder::stroke(px(width * view.zoom.max(0.6)));
         path.move_to(at(from));
-        path.cubic_bezier_to(at(to), at((from.0 + bend, from.1)), at((to.0 - bend, to.1)));
+        path.cubic_bezier_to(at(to), at(a), at(b));
         if let Ok(path) = path.build() {
             window.paint_path(path, color.opacity(edge.alpha));
         }

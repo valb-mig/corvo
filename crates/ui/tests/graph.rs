@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use corvo_ui::graph::{
-    BLOCK, CHIP, GAP, HEIGHT, PAD, RIM, SPAN, Shape, Spot, TITLE, View, WIDTH, ZOOM_MIN, fit,
-    frame, heads, hull, layout, span, touches,
+    AROUND, BLOCK, CHIP, GAP, HEIGHT, PAD, RIM, SPAN, Shape, Spot, TITLE, View, WIDTH, ZOOM_MIN,
+    fit, frame, heads, hull, layout, reach, sight, span, touches,
 };
 use gpui_kit::SharedString;
 
@@ -234,4 +234,41 @@ fn moving_cards_together_moves_only_those_nothing_else_picked_holds() {
     let moved = heads(&[id("fn"), id("docs"), id("src")], &holders);
 
     assert_eq!(moved, [id("docs"), id("src")]);
+}
+
+#[test]
+fn the_sight_is_the_viewport_in_graph_space_with_room_around_it() {
+    let seen = sight(View::new(1.), (0., 0.), (1000., 800.));
+
+    assert_eq!(
+        seen,
+        Some((-AROUND, -AROUND, 1000. + 2. * AROUND, 800. + 2. * AROUND))
+    );
+}
+
+#[test]
+fn zoomed_out_and_scrolled_the_sight_takes_in_more_of_the_graph() {
+    let (x, y, w, h) = sight(View::new(0.5), (100., -400.), (1000., 800.)).unwrap();
+
+    assert_eq!((x, y), ((-AROUND - 100.) / 0.5, (-AROUND + 400.) / 0.5));
+    assert_eq!(
+        (w, h),
+        ((1000. + 2. * AROUND) / 0.5, (800. + 2. * AROUND) / 0.5)
+    );
+    // A card scrolled past the bottom of the viewport is out of sight.
+    assert!(!touches((x, y, w, h), (0., 3000., WIDTH, HEIGHT)));
+}
+
+#[test]
+fn before_the_viewport_is_known_everything_is_in_sight() {
+    assert_eq!(sight(View::new(1.), (0., 0.), (0., 0.)), None);
+}
+
+#[test]
+fn a_curve_reaches_past_its_ends_when_its_cards_are_close() {
+    // Far apart, the curve stays between its ends.
+    assert_eq!(reach((0., 0.), (400., 100.)), (0., 0., 400., 100.));
+    // Close, it bends out past both.
+    let (x, _, w, _) = reach((0., 0.), (10., 100.));
+    assert_eq!((x, x + w), (10. - SPAN / 2., SPAN / 2.));
 }
