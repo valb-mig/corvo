@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use corvo_domain::{Chat, Choice, End, Message, Pick};
 use corvo_ui::agent::AgentLogo;
+use corvo_ui::spinner::Spinner;
 use corvo_ui::{field, notice};
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::attachment::{Attachment, AttachmentMedia};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Axis, Context, Entity, EventEmitter, ExternalPaths,
@@ -260,7 +260,7 @@ impl Dock {
                 None => {
                     let current = reply.current().filter(|_| !agents.is_thinking(chat.id()));
                     (
-                        Spinner::new().xsmall().into_any_element(),
+                        Spinner::new().into_any_element(),
                         current.map_or("Thinking".to_owned(), |step| one_line(step.title())),
                         current
                             .and_then(|step| step.target())
@@ -621,7 +621,7 @@ impl Render for Picker {
                     .gap_2()
                     .text_sm()
                     .text_color(theme.muted_foreground)
-                    .child(Spinner::new().xsmall())
+                    .child(Spinner::new())
                     .child(format!("Starting {name}…")),
             );
         } else {
