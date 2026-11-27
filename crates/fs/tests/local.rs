@@ -202,3 +202,36 @@ fn every_folder_lists_what_the_walker_listed() {
     }
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn creating_over_something_says_which_name_is_taken() {
+    let dir = scratch("create");
+    LocalFs.create_file(&dir.join("a.rs")).unwrap();
+    LocalFs.create_dir(&dir.join("src")).unwrap();
+
+    let file = LocalFs.create_file(&dir.join("a.rs")).unwrap_err();
+    let folder = LocalFs.create_dir(&dir.join("src")).unwrap_err();
+
+    assert_eq!(file.to_string(), "a.rs is already there");
+    assert_eq!(folder.kind(), std::io::ErrorKind::AlreadyExists);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn renaming_never_writes_over_another_file() {
+    let dir = scratch("rename");
+    fs::write(dir.join("a.rs"), "a").unwrap();
+    fs::write(dir.join("b.rs"), "b").unwrap();
+
+    let err = LocalFs
+        .rename(&dir.join("a.rs"), &dir.join("b.rs"))
+        .unwrap_err();
+    LocalFs
+        .rename(&dir.join("a.rs"), &dir.join("c.rs"))
+        .unwrap();
+
+    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read_to_string(dir.join("b.rs")).unwrap(), "b");
+    assert_eq!(fs::read_to_string(dir.join("c.rs")).unwrap(), "a");
+    fs::remove_dir_all(dir).unwrap();
+}

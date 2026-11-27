@@ -2,6 +2,7 @@ mod chats;
 mod ignored;
 mod options;
 mod store;
+pub mod trash;
 
 use std::io;
 use std::path::Path;
@@ -20,10 +21,7 @@ pub struct LocalFs;
 // The files under a folder, at most so many, leaving out what git ignores; sorted, for a palette
 // to search.
 pub fn files(root: &Path, most: usize) -> Vec<std::path::PathBuf> {
-    let walk = WalkBuilder::new(root)
-        .hidden(false)
-        .filter_entry(|entry| entry.file_name() != ".git")
-        .build();
+    let walk = walk(root).build();
     let mut files: Vec<_> = walk
         .flatten()
         .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
@@ -32,6 +30,14 @@ pub fn files(root: &Path, most: usize) -> Vec<std::path::PathBuf> {
         .collect();
     files.sort();
     files
+}
+
+// A walk of the files under a folder that leaves out .git and what git ignores, hidden ones kept.
+fn walk(root: &Path) -> WalkBuilder {
+    let mut walk = WalkBuilder::new(root);
+    walk.hidden(false)
+        .filter_entry(|entry| entry.file_name() != ".git");
+    walk
 }
 
 impl Fs for LocalFs {
@@ -73,4 +79,41 @@ impl Fs for LocalFs {
     fn size(&self, path: &Path) -> io::Result<u64> {
         Ok(std::fs::metadata(path)?.len())
     }
+
+    fn create_file(&self, path: &Path) -> io::Result<()> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map(drop)
+            .map_err(|err| taken(err, path))
+    }
+
+    fn create_dir(&self, path: &Path) -> io::Result<()> {
+        std::fs::create_dir(path).map_err(|err| taken(err, path))
+    }
+
+    // A rename on its own writes over a file already there: that is looked for first.
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        if to.symlink_metadata().is_ok() {
+            return Err(taken(io::ErrorKind::AlreadyExists.into(), to));
+        }
+        std::fs::rename(from, to)
+    }
+
+    fn trash(&self, path: &Path) -> io::Result<()> {
+        trash::send(path, &trash::home()?, &trash::now()).map(drop)
+    }
+}
+
+// Says which name is taken, rather than the system's "File exists".
+fn taken(err: io::Error, path: &Path) -> io::Error {
+    if err.kind() != io::ErrorKind::AlreadyExists {
+        return err;
+    }
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!("{name} is already there"),
+    )
 }
