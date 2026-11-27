@@ -9,11 +9,11 @@ use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Bounds, CursorStyle, Div, Element, ElementId, FocusHandle, FontWeight,
-    GlobalElementId, Hsla, InspectorElementId, InteractiveElement as _, IntoElement, LayoutId,
-    MouseButton, ParentElement as _, PathBuilder, Pixels, Point, RenderOnce, SharedString,
-    Stateful, StatefulInteractiveElement as _, Styled as _, Window, canvas, div, point,
-    prelude::FluentBuilder as _, px, rems,
+    AnyElement, App, Bounds, Context, CursorStyle, Div, Element, ElementId, FocusHandle,
+    FontWeight, GlobalElementId, Hsla, InspectorElementId, InteractiveElement as _, IntoElement,
+    LayoutId, MouseButton, ParentElement as _, PathBuilder, Pixels, Point, RenderOnce,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Window, canvas, div,
+    point, prelude::FluentBuilder as _, px, rems,
 };
 
 use crate::motion::{Glides, Pan, Sight};
@@ -107,12 +107,46 @@ struct Under {
     run: Handler,
 }
 
-// An entry of the menu a right click on the card opens, or a line between entries.
+// An entry of the menu a right click on the card opens, a line between entries, or an entry
+// opening a menu of its own with the entries it holds.
+#[derive(Clone)]
 struct Action {
     label: SharedString,
     glyph: Glyph,
     run: Handler,
     line: bool,
+    inner: Vec<Action>,
+}
+
+// An entry of a card's menu that opens a menu of its own, as Copy holds the ways to copy.
+pub struct Submenu(Action);
+
+impl Submenu {
+    pub fn new(label: impl Into<SharedString>, glyph: Glyph) -> Self {
+        Self(Action {
+            label: label.into(),
+            glyph,
+            run: Rc::new(|_, _| {}),
+            line: false,
+            inner: Vec::new(),
+        })
+    }
+
+    pub fn entry(
+        mut self,
+        label: impl Into<SharedString>,
+        glyph: Glyph,
+        run: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.0.inner.push(Action {
+            label: label.into(),
+            glyph,
+            run: Rc::new(run),
+            line: false,
+            inner: Vec::new(),
+        });
+        self
+    }
 }
 
 struct Drop {
@@ -213,6 +247,7 @@ impl Card {
             glyph,
             run: Rc::new(run),
             line: false,
+            inner: Vec::new(),
         });
         self
     }
@@ -224,7 +259,16 @@ impl Card {
             glyph: Glyph::Minus,
             run: Rc::new(|_, _| {}),
             line: true,
+            inner: Vec::new(),
         });
+        self
+    }
+
+    // An entry opening a menu of its own; one with no entries is left out.
+    pub fn submenu(mut self, submenu: Submenu) -> Self {
+        if !submenu.0.inner.is_empty() {
+            self.actions.push(submenu.0);
+        }
         self
     }
 
@@ -337,6 +381,7 @@ impl Group {
             glyph,
             run: Rc::new(run),
             line: false,
+            inner: Vec::new(),
         });
         self
     }
@@ -1940,12 +1985,12 @@ fn card_element(
         let actions = Rc::new(card.actions);
         let (camera, id) = (hands.camera.clone(), card.id.clone());
         let (group, hide) = (hands.group.clone(), hands.hide.clone());
-        head.context_menu(move |menu, _, _| match camera.picked_with(&id) {
+        head.context_menu(move |menu, window, cx| match camera.picked_with(&id) {
             Some(keys) if together => {
                 let menu = pick_item(menu, "Group…", Glyph::Group, &keys, &camera, &group);
                 pick_item(menu, "Hide selected", Glyph::EyeOff, &keys, &camera, &hide)
             }
-            _ => fill(menu, &actions),
+            _ => fill(menu, &actions, window, cx),
         })
         .into_any_element()
     };
@@ -2193,15 +2238,32 @@ fn frame_element(
                 .text_color(theme.blue),
         )
         .child(title)
-        .context_menu(move |menu, _, _| fill(menu, &actions))
+        .context_menu(move |menu, window, cx| fill(menu, &actions, window, cx))
         .into_any_element();
     (body, head)
 }
 
-fn fill(mut menu: PopupMenu, actions: &[Action]) -> PopupMenu {
+fn fill(
+    mut menu: PopupMenu,
+    actions: &[Action],
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
     for action in actions {
         if action.line {
             menu = menu.separator();
+            continue;
+        }
+        if !action.inner.is_empty() {
+            let inner = action.inner.clone();
+            let icon = Some(Icon::new(action.glyph));
+            menu = menu.submenu_with_icon(
+                icon,
+                action.label.clone(),
+                window,
+                cx,
+                move |sub, window, cx| fill(sub, &inner, window, cx),
+            );
             continue;
         }
         let run = action.run.clone();
