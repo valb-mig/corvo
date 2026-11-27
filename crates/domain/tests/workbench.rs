@@ -299,6 +299,38 @@ fn outline_reads_file_through_syntax() {
 }
 
 #[test]
+fn outliner_reads_now_and_parses_on_another_thread() {
+    let bench = bench(project());
+    let outliner = bench
+        .outliner(Path::new("/p/main.rs"), Depth::Items)
+        .unwrap();
+
+    let symbols = std::thread::spawn(move || outliner.run()).join().unwrap();
+
+    assert_eq!(symbols, [Symbol::new("main", SymbolKind::Function, 0, 3)]);
+}
+
+#[test]
+fn outliner_does_not_read_a_file_with_no_outline() {
+    let bench = bench(project());
+
+    let outliner = bench.outliner(Path::new("/q/missing.ts"), Depth::Items);
+
+    assert!(outliner.unwrap().run().is_empty());
+}
+
+#[test]
+fn outliner_tells_a_file_it_cannot_read() {
+    let bench = bench(project());
+
+    assert!(
+        bench
+            .outliner(Path::new("/p/gone.rs"), Depth::Items)
+            .is_err()
+    );
+}
+
+#[test]
 fn outline_skips_languages_without_syntax() {
     let bench = bench(project());
     let path = Path::new("/q/index.ts");
