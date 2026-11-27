@@ -198,10 +198,6 @@ impl Branches {
         offers
     }
 
-    fn act(&self, op: Op, window: &mut Window, cx: &mut App) {
-        self.ctx.act(op, window, cx);
-    }
-
     fn branch_menu(&self, branch: &Branch, menu: PopupMenu) -> PopupMenu {
         let current = self.current().map(|b| b.name.clone());
         let name = branch.name.clone();

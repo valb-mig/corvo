@@ -55,10 +55,6 @@ impl Compare {
         }
     }
 
-    pub fn comparison(&self) -> Option<&Comparison> {
-        self.comparison.as_ref()
-    }
-
     // Sets `head` against `base`, read again even when they are the same, as either may have
     // moved.
     pub fn set(&mut self, root: PathBuf, base: String, head: String, cx: &mut Context<Self>) {

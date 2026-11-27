@@ -17,7 +17,9 @@ use gpui_kit::{
     size, uniform_list,
 };
 
-use super::parts::{self, PatchView, ask_name, badge, note, ref_pill, row, since, stat_row};
+use super::parts::{
+    self, PatchView, ago_text, ask_name, badge, note, ref_pill, row, since, stat_row,
+};
 use super::{Ctx, short};
 use crate::palette::{Offer, finds};
 
@@ -636,7 +638,7 @@ impl History {
                                     .child(commit.short().to_owned()),
                             )
                             .child(format!("{} <{}>", commit.author, commit.email))
-                            .child(format!("{} ago", since(when)))
+                            .child(ago_text(when))
                             .when(!parents.is_empty(), |m| {
                                 m.child(h_flex().gap_1().child("parent").children(parents))
                             })

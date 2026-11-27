@@ -196,6 +196,14 @@ pub fn apart(ahead: usize, behind: usize, cx: &App) -> Div {
         })
 }
 
+// How long ago, in a sentence: `just now`, `5m ago`.
+pub fn ago_text(when: i64) -> String {
+    match since(when).as_str() {
+        "now" => "just now".to_owned(),
+        short => format!("{short} ago"),
+    }
+}
+
 // How long ago, from seconds since the epoch: `now`, `5m`, `3h`, `2d`, `4w`.
 pub fn since(when: i64) -> String {
     let now = SystemTime::now()

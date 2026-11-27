@@ -192,10 +192,6 @@ impl GitWindow {
         self.tab
     }
 
-    pub fn root(&self) -> Option<&Path> {
-        self.root.as_deref()
-    }
-
     fn repo<'a>(&self, cx: &'a App) -> Option<&'a Repo> {
         self.ctx.repo(self.root.as_deref()?, cx)
     }
@@ -339,6 +335,22 @@ impl GitWindow {
             worktrees.show(root, cx);
             worktrees.pick(path, cx);
         });
+        cx.notify();
+    }
+
+    // Opens a stash in the stash.
+    pub fn pick_stash(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.tab = Tab::Stash;
+        self.stashes
+            .update(cx, |stashes, cx| stashes.pick_stash(ix, cx));
+        cx.notify();
+    }
+
+    // Opens a file in conflict.
+    pub fn pick_conflict(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.tab = Tab::Conflicts;
+        self.conflicts
+            .update(cx, |conflicts, cx| conflicts.pick_conflict(path, cx));
         cx.notify();
     }
 
@@ -616,7 +628,7 @@ impl GitWindow {
             let stop = match tab {
                 Tab::Changes => stop.count(changed),
                 Tab::Worktrees => stop.dot(working.then_some(claude)),
-                Tab::Conflicts => stop.alarm(true).count(conflicts.max(1)),
+                Tab::Conflicts => stop.alarm(true).count(conflicts),
                 _ => stop,
             };
             stops.push(stop);

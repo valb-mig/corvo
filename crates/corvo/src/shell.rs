@@ -849,10 +849,17 @@ impl Shell {
                 let (project, prompt) = (project.clone(), prompt.clone());
                 self.agents.update(cx, |agents, cx| {
                     // A chat of another folder is left as it is: the question goes to a new one.
-                    if agents.active().is_none_or(|chat| chat.project() != project) {
+                    // With nothing to ask, the chat only opens there, for the dev to write.
+                    if prompt.is_empty()
+                        || agents.active().is_none_or(|chat| chat.project() != project)
+                    {
                         agents.new_chat(&project, cx);
                     }
-                    agents.send(&prompt, &[], &project, cx);
+                    if prompt.is_empty() {
+                        agents.open(&project, cx);
+                    } else {
+                        agents.send(&prompt, &[], &project, cx);
+                    }
                 });
                 if !self.chatting {
                     self.toggle_chat(window, cx);
