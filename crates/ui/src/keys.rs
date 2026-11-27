@@ -14,9 +14,18 @@ actions!(
         ShowTerminal,
         OpenPalette,
         Dismiss,
-        TogglePanel
+        TogglePanel,
+        PickPrevious,
+        PickNext,
+        OpenPicked,
+        RemovePicked,
+        RenamePicked,
+        NewWorkspace
     ]
 );
+
+// The key context of the list of workspaces.
+pub const WORKSPACES: &str = "Workspaces";
 
 pub fn bind(keymap: &Keymap, cx: &mut App) {
     let bindings: Vec<_> = keymap
@@ -48,6 +57,12 @@ fn action(command: Command) -> Box<dyn Action> {
         Command::OpenPalette => Box::new(OpenPalette),
         Command::Dismiss => Box::new(Dismiss),
         Command::TogglePanel => Box::new(TogglePanel),
+        Command::PickPrevious => Box::new(PickPrevious),
+        Command::PickNext => Box::new(PickNext),
+        Command::OpenPicked => Box::new(OpenPicked),
+        Command::RemovePicked => Box::new(RemovePicked),
+        Command::RenamePicked => Box::new(RenamePicked),
+        Command::NewWorkspace => Box::new(NewWorkspace),
     }
 }
 
@@ -56,5 +71,6 @@ fn context(scope: Scope) -> Option<&'static str> {
         Scope::Global => None,
         Scope::Editor => Some("Input && mode == editor"),
         Scope::Tree => Some(gpui_kit::base::tree_key_context()),
+        Scope::Workspaces => Some(WORKSPACES),
     }
 }

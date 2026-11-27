@@ -20,3 +20,12 @@ impl Kind for Primary {
         button.primary()
     }
 }
+
+// For what can't be undone, as removing.
+pub struct Danger;
+
+impl Kind for Danger {
+    fn style(&self, button: Button) -> Button {
+        button.danger().xsmall()
+    }
+}

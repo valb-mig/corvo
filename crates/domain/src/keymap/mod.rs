@@ -42,6 +42,12 @@ impl Default for Keymap {
             Binding::new("ctrl-k", Command::OpenPalette, Scope::Global),
             Binding::new("escape", Command::Dismiss, Scope::Global),
             Binding::new("ctrl-b", Command::TogglePanel, Scope::Global),
+            Binding::new("up", Command::PickPrevious, Scope::Workspaces),
+            Binding::new("down", Command::PickNext, Scope::Workspaces),
+            Binding::new("enter", Command::OpenPicked, Scope::Workspaces),
+            Binding::new("delete", Command::RemovePicked, Scope::Workspaces),
+            Binding::new("f2", Command::RenamePicked, Scope::Workspaces),
+            Binding::new("ctrl-n", Command::NewWorkspace, Scope::Workspaces),
         ])
     }
 }

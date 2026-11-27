@@ -20,4 +20,15 @@ pub enum Command {
     // Opens the panel on the right of the window in front, or closes it: the file tree of the
     // code, the list of chats, the changed files of the git window, the terminals.
     TogglePanel,
+    // On the list of workspaces: picks the one above or below, the one on the right shown.
+    PickPrevious,
+    PickNext,
+    // Opens the workspace picked on the list.
+    OpenPicked,
+    // Asks whether to remove the workspace picked on the list.
+    RemovePicked,
+    // Turns the name of the workspace picked on the list into a field.
+    RenamePicked,
+    // Puts the cursor in the field that adds a workspace.
+    NewWorkspace,
 }

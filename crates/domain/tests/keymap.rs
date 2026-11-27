@@ -83,3 +83,22 @@ fn bind_replaces_same_chord_in_same_scope() {
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].command(), Command::Redo);
 }
+
+#[test]
+fn the_workspace_list_has_its_own_keys() {
+    let keymap = Keymap::default();
+    let on_list = |chord: &str| {
+        keymap
+            .bindings()
+            .iter()
+            .find(|b| b.chord() == chord && b.scope() == Scope::Workspaces)
+            .map(Binding::command)
+    };
+
+    assert_eq!(on_list("up"), Some(Command::PickPrevious));
+    assert_eq!(on_list("down"), Some(Command::PickNext));
+    assert_eq!(on_list("enter"), Some(Command::OpenPicked));
+    assert_eq!(on_list("delete"), Some(Command::RemovePicked));
+    assert_eq!(on_list("f2"), Some(Command::RenamePicked));
+    assert_eq!(on_list("ctrl-n"), Some(Command::NewWorkspace));
+}
