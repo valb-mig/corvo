@@ -3,13 +3,22 @@ use std::hash::Hash;
 use std::mem;
 use std::time::{Duration, Instant};
 
+use gpui_kit::{Animation, ease_out_quint};
+
 // How the home graph moves instead of jumping: cards glide from where they showed to where the
 // layout puts them, new ones coming out of the card that holds them, and the camera glides to
-// where the zoom bar sends it. Nothing here knows about the window: the time comes in, so it can
-// be driven by hand.
+// where the zoom bar sends it. The glides know nothing about the window: the time comes in, so
+// they can be driven by hand.
 
 // How long a glide takes.
 pub const TIME: Duration = Duration::from_millis(180);
+
+// How what opens over the window comes in (a window over the home, its palette, a drawer):
+// quickly, settling softly. GPUI runs it, and with the desktop's reduced motion on, shows it
+// already in place.
+pub fn opening() -> Animation {
+    Animation::new(Duration::from_millis(160)).with_easing(ease_out_quint())
+}
 
 // Fast at first, settling softly: an ease-out cubic over 0..=1.
 pub fn ease(t: f32) -> f32 {

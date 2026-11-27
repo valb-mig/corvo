@@ -1,10 +1,10 @@
-use std::time::Duration;
-
 use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{
-    Animation, AnimationExt as _, AnyElement, App, ElementId, InteractiveElement as _, IntoElement,
-    ParentElement, RenderOnce, Styled as _, Window, ease_out_quint, px,
+    AnimationExt as _, AnyElement, App, ElementId, InteractiveElement as _, IntoElement,
+    ParentElement, RenderOnce, Styled as _, Window, px,
 };
+
+use crate::motion;
 
 // The width of a drawer.
 pub const WIDTH: f32 = 280.;
@@ -39,7 +39,6 @@ impl RenderOnce for Drawer {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
         // It slides in from the right edge as it opens.
-        let slide = Animation::new(Duration::from_millis(160)).with_easing(ease_out_quint());
         v_flex()
             .id(self.id.clone())
             .absolute()
@@ -55,7 +54,7 @@ impl RenderOnce for Drawer {
             .bg(theme.sidebar)
             .shadow_lg()
             .children(self.children)
-            .with_animation(self.id, slide, |drawer, delta| {
+            .with_animation(self.id, motion::opening(), |drawer, delta| {
                 drawer.right(px(INSET - 16. * (1. - delta))).opacity(delta)
             })
     }
