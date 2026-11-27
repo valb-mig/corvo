@@ -612,6 +612,8 @@ struct Lens {
     still: bool,
     // Space is held: a drag anywhere moves the view.
     hand: bool,
+    // The card to glide to once the layout has it.
+    seek: Option<SharedString>,
 }
 
 #[derive(Clone)]
@@ -644,6 +646,7 @@ impl Default for Lens {
             pan: None,
             still: false,
             hand: false,
+            seek: None,
         }
     }
 }
@@ -692,10 +695,17 @@ impl Camera {
         self.lens.borrow().offset
     }
 
+    // Glides to a card, picked, once the layout has it: one that is coming into the home shows
+    // as soon as it is placed. Moving the camera by hand meanwhile drops it.
+    pub fn look_at(&self, key: impl Into<SharedString>) {
+        self.lens.borrow_mut().seek = Some(key.into());
+    }
+
     // The wheel and the mouse move the camera at once, stopping any glide.
     fn move_by(&self, (dx, dy): (f32, f32)) {
         let mut lens = self.lens.borrow_mut();
         lens.pan = None;
+        lens.seek = None;
         lens.offset = (lens.offset.0 + dx, lens.offset.1 + dy);
     }
 
@@ -738,6 +748,24 @@ impl Camera {
             return false;
         }
         lens.look(pan.at(now));
+        true
+    }
+
+    // A card where the layout puts it, not where it shows on its way there: when it is the one
+    // sought, it is picked and the camera heads to it.
+    // Whether it set off.
+    fn sought(&self, key: &SharedString, (x, y, width, height): Rect) -> bool {
+        let mut lens = self.lens.borrow_mut();
+        if lens.seek.as_ref() != Some(key) {
+            return false;
+        }
+        lens.seek = None;
+        lens.picked = vec![key.clone()];
+        let zoom = lens.aim().zoom;
+        lens.head(Sight {
+            zoom,
+            center: (x + width / 2., y + height / 2.),
+        });
         true
     }
 
@@ -1317,12 +1345,17 @@ impl RenderOnce for Graph {
         // coming in comes out of the card holding it. Cards dragged are just where the mouse is.
         let snap = matches!(drag, Some(Drag::Cards(..)));
         let mut alphas = vec![1.; placed.len()];
+        let mut aimed = false;
         for ix in 0..placed.len() {
             if tucked[ix].is_some() {
                 continue;
             }
             let from = placed[ix].holder.map(|hx| placed[hx].at);
             let card = &mut placed[ix];
+            aimed |= camera.sought(
+                &card.card.id,
+                (card.at.0, card.at.1, card.size.0, card.size.1),
+            );
             (card.at, alphas[ix]) = camera.place(&card.card.id, card.at, from, now, snap);
         }
         let rect = |ix: usize| {
@@ -1419,7 +1452,7 @@ impl RenderOnce for Graph {
             }
         }
         camera.remember(self.nudges, boxes, holders, (layout.width, layout.height));
-        if camera.settle(now) || panning {
+        if camera.settle(now) || panning || aimed {
             window.request_animation_frame();
         }
 
