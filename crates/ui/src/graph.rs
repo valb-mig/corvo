@@ -13,7 +13,7 @@ use gpui_kit::{
     GlobalElementId, Hsla, InspectorElementId, InteractiveElement as _, IntoElement, LayoutId,
     MouseButton, ParentElement as _, PathBuilder, Pixels, Point, RenderOnce, SharedString,
     Stateful, StatefulInteractiveElement as _, Styled as _, Window, canvas, div, point,
-    prelude::FluentBuilder as _, px,
+    prelude::FluentBuilder as _, px, rems,
 };
 
 use crate::motion::{Glides, Pan, Sight};
@@ -31,6 +31,10 @@ use crate::motion::{Glides, Pan, Sight};
 
 pub const WIDTH: f32 = 232.;
 pub const HEIGHT: f32 = 52.;
+// A folder's card is taller, for its size and path, and has a tab on top.
+pub const FOLDER: f32 = 64.;
+const TAB: (f32, f32) = (58., 7.);
+const TAB_LEFT: f32 = 10.;
 pub const GAP: f32 = 10.;
 pub const SPAN: f32 = 72.;
 pub const PAD: f32 = 24.;
@@ -79,6 +83,13 @@ pub struct Card {
     form: Form,
     // The chip under the sheets of a pile.
     under: Option<Under>,
+    folder: Option<Folder>,
+}
+
+// What a folder's card shows besides a file's: how big it is, and where.
+struct Folder {
+    size: Option<SharedString>,
+    path: SharedString,
 }
 
 // How a card is drawn: plain, as the top of a pile with its sheets and a chip under it, or as a
@@ -96,11 +107,12 @@ struct Under {
     run: Handler,
 }
 
-// An entry of the menu a right click on the card opens.
+// An entry of the menu a right click on the card opens, or a line between entries.
 struct Action {
     label: SharedString,
     glyph: Glyph,
     run: Handler,
+    line: bool,
 }
 
 struct Drop {
@@ -126,6 +138,7 @@ impl Card {
             drop: None,
             form: Form::Plain,
             under: None,
+            folder: None,
         }
     }
 
@@ -147,6 +160,25 @@ impl Card {
     pub fn badge(mut self, badge: impl Into<SharedString>) -> Self {
         self.badge = Some(badge.into());
         self
+    }
+
+    // Drawn as a folder: taller, with a tab on top, its size beside the title (none while it is
+    // being counted) and its path under what it holds.
+    pub fn folder(mut self, path: impl Into<SharedString>, size: Option<SharedString>) -> Self {
+        self.folder = Some(Folder {
+            size,
+            path: path.into(),
+        });
+        self
+    }
+
+    // The height of its header, where its curves come and go.
+    fn head(&self) -> f32 {
+        if self.folder.is_some() {
+            FOLDER
+        } else {
+            HEIGHT
+        }
     }
 
     pub fn muted(mut self, muted: bool) -> Self {
@@ -180,6 +212,18 @@ impl Card {
             label: label.into(),
             glyph,
             run: Rc::new(run),
+            line: false,
+        });
+        self
+    }
+
+    // A line in the card's menu, between the entries added before and after it.
+    pub fn separator(mut self) -> Self {
+        self.actions.push(Action {
+            label: SharedString::default(),
+            glyph: Glyph::Minus,
+            run: Rc::new(|_, _| {}),
+            line: true,
         });
         self
     }
@@ -227,10 +271,10 @@ impl Card {
 
     fn size(&self) -> (f32, f32) {
         match (&self.drop, self.form) {
-            (Some(drop), _) => (drop.width.max(WIDTH), HEIGHT + drop.height),
+            (Some(drop), _) => (drop.width.max(WIDTH), self.head() + drop.height),
             (None, Form::Pile) => (WIDTH, HEIGHT + SHEETS + UNDER + CHIP),
             (None, Form::Chip) => (WIDTH, CHIP),
-            (None, Form::Plain) => (WIDTH, HEIGHT),
+            (None, Form::Plain) => (WIDTH, self.head()),
         }
     }
 }
@@ -292,6 +336,7 @@ impl Group {
             label: label.into(),
             glyph,
             run: Rc::new(run),
+            line: false,
         });
         self
     }
@@ -319,6 +364,7 @@ impl Group {
             drop: None,
             form: Form::Plain,
             under: None,
+            folder: None,
         }
     }
 }
@@ -1302,11 +1348,14 @@ impl RenderOnce for Graph {
                 continue;
             }
             let holder = &placed[hx];
-            let from = (holder.at.0 + holder.size.0, holder.at.1 + HEIGHT / 2.);
+            let from = (
+                holder.at.0 + holder.size.0,
+                holder.at.1 + holder.card.head() / 2.,
+            );
             match tucked[ix] {
                 None => edges.push(Edge {
                     from,
-                    to: (card.at.0, card.at.1 + HEIGHT / 2.),
+                    to: (card.at.0, card.at.1 + card.card.head() / 2.),
                     stroke: if card.open { Stroke::Lit } else { Stroke::Tree },
                     alpha: alphas[ix],
                 }),
@@ -1759,7 +1808,7 @@ struct Look {
 }
 
 fn card_element(
-    card: Card,
+    mut card: Card,
     (x, y, w, h): (f32, f32, f32, f32),
     look: Look,
     press: Press,
@@ -1775,6 +1824,9 @@ fn card_element(
         None => theme.foreground,
     };
     let head_id = ElementId::Name(format!("{}:head", card.id).into());
+    let height = card.head();
+    let folder = card.folder.take();
+    let is_folder = folder.is_some();
     let pile = card.form == Form::Pile;
     let clickable = card.on_click.is_some();
     let selectable = card.selectable;
@@ -1796,12 +1848,14 @@ fn card_element(
             window.refresh();
         })
         .flex_shrink_0()
-        .h(px(HEIGHT * zoom))
+        .h(px(height * zoom))
         .px_3()
         .gap_2()
+        // A folder's three lines start at the top, its icon level with the first.
+        .when(is_folder, |head| head.items_start().pt(px(8. * zoom)))
         .children(card.icon.map(|draw| draw(px(ICON * zoom))))
-        .child(
-            v_flex()
+        .child(match folder {
+            None => v_flex()
                 .flex_1()
                 .min_w_0()
                 .child(
@@ -1816,7 +1870,56 @@ fn card_element(
                     card.meta
                         .map(|meta| div().truncate().text_xs().text_color(muted).child(meta)),
                 ),
-        )
+            // The title with the size on its right, what it holds, then where it is.
+            Some(Folder { size, path }) => {
+                let mono = theme.mono_font_family.clone();
+                let small = rems(0.656);
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(zoom))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_sm()
+                                    .line_height(rems(1.15))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(title)
+                                    .child(card.title),
+                            )
+                            .children(size.map(|size| {
+                                div()
+                                    .flex_shrink_0()
+                                    .font_family(mono.clone())
+                                    .text_size(small)
+                                    .text_color(muted)
+                                    .child(size)
+                            })),
+                    )
+                    .children(card.meta.map(|meta| {
+                        div()
+                            .truncate()
+                            .text_xs()
+                            .line_height(rems(1.))
+                            .text_color(muted)
+                            .child(meta)
+                    }))
+                    .child(
+                        div()
+                            .truncate()
+                            .font_family(mono)
+                            .text_size(small)
+                            .line_height(rems(0.9))
+                            .text_color(muted.opacity(0.65))
+                            .child(path),
+                    )
+            }
+        })
         .children(
             card.badge
                 .map(|badge| Tag::secondary().xsmall().child(badge)),
@@ -1874,35 +1977,86 @@ fn card_element(
             }
         }
     });
-    let bg = match card.tint {
-        _ if look.picked => theme.sidebar.blend(theme.blue.opacity(0.14)),
-        Some((color, true)) => theme.sidebar.blend(color.opacity(0.1)),
-        _ => theme.sidebar,
+    // A folder's card is a shade lighter than a file's.
+    let base = if is_folder {
+        theme.sidebar.blend(theme.foreground.opacity(0.03))
+    } else {
+        theme.sidebar
     };
-    v_flex()
+    let bg = match card.tint {
+        _ if look.picked => base.blend(theme.blue.opacity(0.14)),
+        Some((color, true)) => base.blend(color.opacity(0.1)),
+        _ => base,
+    };
+    let edge = if look.open || look.picked {
+        theme.blue
+    } else {
+        theme.border
+    };
+    let hovers = clickable && !look.open && !look.picked;
+    let group = SharedString::from(format!("{}:card", card.id));
+    // The tab of a folder, on top of the card at its left, over the card's own border so the
+    // two read as one. Only its border color follows the hover, which keeps the layout as is.
+    let tab = is_folder.then(|| {
+        div()
+            .absolute()
+            .left(px(TAB_LEFT * zoom))
+            .top(px(-TAB.1 * zoom))
+            .w(px(TAB.0 * zoom))
+            .h(px(TAB.1 * zoom + 1.))
+            .rounded_tl(px(5. * zoom))
+            .rounded_tr(px(5. * zoom))
+            .border_t_1()
+            .border_l_1()
+            .border_r_1()
+            .border_color(edge)
+            .bg(bg)
+            .when(hovers, |tab| {
+                tab.group_hover(group.clone(), move |style| style.border_color(muted))
+            })
+    });
+    let element = v_flex()
         .id(ElementId::Name(card.id))
+        .group(group.clone())
         .absolute()
         .left(px(x))
         .top(px(y))
         .w(px(w))
         .h(px(h))
-        .overflow_hidden()
+        // The tab stands out of a folder's card, so only a card with a panel clips.
+        .when(!is_folder || drop.is_some(), |el| el.overflow_hidden())
         .opacity(look.alpha)
         .rounded_lg()
         .border_1()
-        .border_color(if look.open || look.picked {
-            theme.blue
-        } else {
-            theme.border
-        })
+        .border_color(edge)
         .bg(bg)
-        .when(clickable && !look.open && !look.picked, |el| {
+        .when(hovers, |el| {
             el.hover(move |style| style.border_color(muted))
         })
         .when(pile, |el| el.shadow_md())
         .when_some(turn, |el, turn| el.on_scroll(turn))
         .child(head)
         .children(drop)
+        .children(tab);
+    if !is_folder {
+        return element.into_any_element();
+    }
+    // The card's border is drawn over all it holds, so a line of the card's fill drawn after it
+    // takes the border out from under the tab, the two reading as one.
+    let seam = div()
+        .absolute()
+        .left(px(x + 2. + TAB_LEFT * zoom))
+        .top(px(y))
+        .w(px(TAB.0 * zoom - 2.))
+        .h(px(1.))
+        .bg(bg)
+        .opacity(look.alpha);
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .child(element)
+        .child(seam)
         .into_any_element()
 }
 
@@ -2046,6 +2200,10 @@ fn frame_element(
 
 fn fill(mut menu: PopupMenu, actions: &[Action]) -> PopupMenu {
     for action in actions {
+        if action.line {
+            menu = menu.separator();
+            continue;
+        }
         let run = action.run.clone();
         let item = PopupMenuItem::new(action.label.clone())
             .icon(action.glyph)
