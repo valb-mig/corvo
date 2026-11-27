@@ -24,9 +24,9 @@ use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnimationExt as _, AnyElement, App, AppContext as _, Context, ElementId, Entity, FocusHandle,
-    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, PathPromptOptions,
-    Render, Styled as _, Subscription, Window, div, px,
+    AnimationExt as _, AnyElement, AnyView, App, AppContext as _, Context, ElementId, Entity,
+    FocusHandle, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
+    PathPromptOptions, Render, StyleRefinement, Styled as _, Subscription, Window, div, px,
 };
 use lsp_types::Position;
 
@@ -976,8 +976,11 @@ impl Shell {
     // The code over the home: the tabs, and the panel floating on their right with the file tree,
     // the active file's outline nested under its row.
     fn overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        // The tree is drawn again only when it changes, not on each key typed beside it.
         let panel = self.panel.then(|| {
-            Drawer::new("code-panel").child(div().flex_1().min_h_0().child(self.files.clone()))
+            let files =
+                AnyView::from(self.files.clone()).cached(StyleRefinement::default().size_full());
+            Drawer::new("code-panel").child(div().flex_1().min_h_0().child(files))
         });
         let body = div()
             .relative()
@@ -1409,7 +1412,12 @@ impl Render for Shell {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(self.home.clone())
+                    // The home is drawn again only when it changes, not on each key or blink of
+                    // the window over it: with many folders open it is most of a frame.
+                    .child(
+                        AnyView::from(self.home.clone())
+                            .cached(StyleRefinement::default().size_full()),
+                    )
                     .children(overlay)
                     .child(self.dock.clone()),
             )
