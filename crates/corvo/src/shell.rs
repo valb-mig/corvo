@@ -11,9 +11,9 @@ use corvo_domain::{
 use corvo_fs::{JsonChats, JsonOptions, LocalFs};
 use corvo_git::GitCli;
 use corvo_lsp::{Hub, Note};
-use corvo_ui::drawer::Drawer;
+use corvo_ui::drawer::{self, Drawer};
 use corvo_ui::keys::{
-    Dismiss, OpenPalette, Save, ShowChat, ShowCode, ShowGit, ShowTerminal, TogglePanel,
+    Dismiss, FindInFiles, OpenPalette, Save, ShowChat, ShowCode, ShowGit, ShowTerminal, TogglePanel,
 };
 use corvo_ui::language_icon::LanguageIcon;
 use corvo_ui::statusbar::{Action, Popup, StatusBar};
@@ -36,6 +36,7 @@ use crate::pane::chats::{self, ChatWindow};
 use crate::pane::code::{self, Code};
 use crate::pane::dock::{self, Dock, Project};
 use crate::pane::files::{self, Files};
+use crate::pane::finds::{self, Finds};
 use crate::pane::git::{self, GitWindow};
 use crate::pane::hidden::Hidden;
 use crate::pane::overview::{self, Overview};
@@ -55,6 +56,13 @@ const UNDER_BAR: f32 = 40.;
 const RISE: f32 = 12.;
 const DROP: f32 = 8.;
 
+// What the panel of the code shows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Files,
+    Search,
+}
+
 pub struct Shell {
     focus: FocusHandle,
     spaces: Entity<Workspaces>,
@@ -65,6 +73,10 @@ pub struct Shell {
     // file's outline nested under its row.
     code: Entity<Code>,
     files: Entity<Files>,
+    // The search through the project's files, which takes turns with the file tree in the
+    // code's panel.
+    finds: Entity<Finds>,
+    side: Side,
     home: Entity<Overview>,
     hidden: Entity<Hidden>,
     hiding: bool,
@@ -125,6 +137,7 @@ impl Shell {
         let code =
             cx.new(|cx| Code::new(bench.clone(), hub.clone(), home.clone(), repos.clone(), cx));
         let files = cx.new(|cx| Files::new(bench.clone(), repos.clone(), window, cx));
+        let finds = cx.new(|cx| Finds::new(bench.clone(), code.clone(), window, cx));
         let git = cx.new(|cx| GitWindow::new(repos.clone(), cx));
         let hidden = cx.new(|_| Hidden::new(bench.clone(), home.clone()));
         let stack = cx.new(|_| Stack::default());
@@ -178,6 +191,7 @@ impl Shell {
             cx.subscribe_in(&agents, window, Self::on_agents),
             cx.subscribe_in(&dock, window, Self::on_dock),
             cx.subscribe_in(&files, window, Self::on_files),
+            cx.subscribe_in(&finds, window, Self::on_finds),
             cx.subscribe_in(&code, window, Self::on_code),
             cx.subscribe_in(&home, window, Self::on_home),
             cx.subscribe_in(&git, window, Self::on_git),
@@ -260,6 +274,8 @@ impl Shell {
             hub,
             code,
             files,
+            finds,
+            side: Side::Files,
             home,
             hidden,
             hiding: false,
@@ -426,7 +442,7 @@ impl Shell {
             .active()
             .map(|doc| doc.path().to_path_buf());
         if active.is_none() {
-            self.panel = true;
+            self.set_panel(true, cx);
         }
         let line = active
             .as_deref()
@@ -453,7 +469,7 @@ impl Shell {
     fn toggle_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let keep = self.paletting;
         if self.code.read(cx).is_shown() {
-            self.panel = !self.panel;
+            self.set_panel(!self.panel, cx);
             if !self.panel && !keep {
                 self.code.update(cx, |code, cx| code.focus(window, cx));
             }
@@ -482,6 +498,61 @@ impl Shell {
         true
     }
 
+    // The drawer of the code, open or not; the find bar over the code keeps clear of it.
+    fn set_panel(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.panel = open;
+        let width = open.then(|| self.panel_width());
+        self.code
+            .update(cx, |code, cx| code.beside_panel(width, cx));
+    }
+
+    // The search shows lines of code, and takes more room than the tree.
+    fn panel_width(&self) -> f32 {
+        match self.side {
+            Side::Files => drawer::WIDTH,
+            Side::Search => drawer::WIDE,
+        }
+    }
+
+    fn set_side(&mut self, side: Side, cx: &mut Context<Self>) {
+        self.side = side;
+        self.set_panel(true, cx);
+        cx.notify();
+    }
+
+    fn pick_side(&mut self, side: Side, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_side(side, cx);
+        if side == Side::Search {
+            self.finds
+                .update(cx, |finds, cx| finds.focus(None, window, cx));
+        }
+    }
+
+    // Brings the code with the search in its panel, the keys in the query, which takes what is
+    // selected in the file in front.
+    fn on_find_in_files(&mut self, _: &FindInFiles, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.code.read(cx).is_shown() {
+            self.show_code(window, cx);
+        }
+        self.set_side(Side::Search, cx);
+        let selected = self.code.read(cx).selected_line(cx);
+        self.finds
+            .update(cx, |finds, cx| finds.focus(selected, window, cx));
+    }
+
+    fn on_finds(
+        &mut self,
+        _: &Entity<Finds>,
+        event: &finds::Event,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let finds::Event::Open(path, range) = event;
+        self.code.update(cx, |code, cx| {
+            code.reveal_range(path, range.clone(), window, cx)
+        });
+    }
+
     // What the button of a window's panel does.
     fn panel_button(&self, cx: &Context<Self>) -> impl Fn(&mut Window, &mut App) + 'static {
         let shell = cx.entity().downgrade();
@@ -494,9 +565,28 @@ impl Shell {
         }
     }
 
+    // Esc is bound for the whole window, ahead of what the fields, menus and dialogs bind it to:
+    // each of those is let have it here, in turn, before a window is put away.
     fn on_dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        if self.paletting {
+        let over = window
+            .context_stack()
+            .iter()
+            .any(|context| context.contains("PopupMenu") || context.contains("Dialog"));
+        let shown = self.code.read(cx).is_shown();
+        if over {
+            // The menu or dialog in front closes, through its own binding.
+            cx.propagate();
+        } else if self.paletting {
             self.close_palette(window, cx);
+        } else if shown && self.files.read(cx).is_naming() {
+            self.files.update(cx, |files, cx| files.cancel(window, cx));
+        } else if shown
+            && self.finds.read(cx).has_focus(window, cx)
+            && self.code.read(cx).has_editor(cx)
+        {
+            self.code.update(cx, |code, cx| code.focus(window, cx));
+        } else if self.code.read(cx).is_finding() {
+            self.code.update(cx, |code, cx| code.close_find(window, cx));
         } else if self.code.read(cx).is_shown() {
             self.dismiss(window, cx);
         } else if self.chatting {
@@ -515,6 +605,7 @@ impl Shell {
         let repos::Event(moved) = event;
         self.home.update(cx, |home, cx| home.uncover(moved, cx));
         self.files.update(cx, |files, cx| files.refresh(cx));
+        self.finds.update(cx, |finds, cx| finds.rerun(cx));
         self.read_scripts(cx);
         // The files listed for the palette are walked again when next asked.
         self.index.clear();
@@ -873,6 +964,22 @@ impl Shell {
                 self.code
                     .update(cx, |code, cx| code.reveal(path, Some(at), window, cx));
             }
+            files::Event::Made(path) => {
+                self.code.update(cx, |code, cx| code.open(path, window, cx));
+            }
+            files::Event::Renamed(renamed) => {
+                self.code
+                    .update(cx, |code, cx| code.moved(&renamed.tabs, window, cx));
+            }
+            files::Event::Trashed(closed) => {
+                self.code
+                    .update(cx, |code, cx| code.forget(closed, window, cx));
+            }
+            files::Event::Terminal(dir) => {
+                self.terminals
+                    .update(cx, |terminals, cx| terminals.open_in(dir, window, cx));
+                self.show_terminal(window, cx);
+            }
         }
     }
 
@@ -932,6 +1039,7 @@ impl Shell {
             code::Event::Saved(path) => {
                 self.files
                     .update(cx, |files, cx| files.saved(path, window, cx));
+                self.finds.update(cx, |finds, cx| finds.rerun(cx));
                 self.repos.update(cx, |repos, cx| repos.refresh(cx));
             }
             code::Event::Cursor(path, line) => {
@@ -943,7 +1051,7 @@ impl Shell {
             code::Event::Emptied => {
                 self.files
                     .update(cx, |files, cx| files.follow(None, None, window, cx));
-                self.panel = true;
+                self.set_panel(true, cx);
                 self.rest(window, cx);
             }
             // The keys go back to the window, not to the editor gone.
@@ -992,9 +1100,41 @@ impl Shell {
     fn overlay(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // The tree is drawn again only when it changes, not on each key typed beside it.
         let panel = self.panel.then(|| {
-            let files =
-                AnyView::from(self.files.clone()).cached(StyleRefinement::default().size_full());
-            Drawer::new("code-panel").child(div().flex_1().min_h_0().child(files))
+            let shell = cx.entity().downgrade();
+            let pick = move |side: Side| {
+                let shell = shell.clone();
+                move |window: &mut Window, cx: &mut App| {
+                    shell
+                        .update(cx, |shell, cx| shell.pick_side(side, window, cx))
+                        .ok();
+                }
+            };
+            let tabs = drawer::tabs()
+                .child(drawer::tab(
+                    "panel-files",
+                    Glyph::Folder,
+                    "Files",
+                    self.side == Side::Files,
+                    pick(Side::Files),
+                ))
+                .child(drawer::tab(
+                    "panel-search",
+                    Glyph::Search,
+                    "Search",
+                    self.side == Side::Search,
+                    pick(Side::Search),
+                ));
+            let inside = match self.side {
+                // The tree is drawn again only when it changes, not on each key typed beside it.
+                Side::Files => AnyView::from(self.files.clone())
+                    .cached(StyleRefinement::default().size_full())
+                    .into_any_element(),
+                Side::Search => self.finds.clone().into_any_element(),
+            };
+            Drawer::new("code-panel")
+                .width(self.panel_width())
+                .child(tabs)
+                .child(div().flex_1().min_h_0().child(inside))
         });
         let body = div()
             .relative()
@@ -1003,7 +1143,7 @@ impl Shell {
             .children(panel);
         let bar = WindowBar::new(Glyph::Code, "Code").panel(
             self.panel,
-            "Files (Ctrl+B)",
+            "Files and search (Ctrl+B)",
             self.panel_button(cx),
         );
         let offers = self.paletting.then(|| {
@@ -1414,6 +1554,7 @@ impl Render for Shell {
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::on_show_code))
+            .on_action(cx.listener(Self::on_find_in_files))
             .on_action(cx.listener(Self::on_show_git))
             .on_action(cx.listener(Self::on_show_chat))
             .on_action(cx.listener(Self::on_show_terminal))

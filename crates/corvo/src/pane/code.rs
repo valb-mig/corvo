@@ -1,15 +1,18 @@
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use corvo_domain::{Change, Content, Doc, Hunk, HunkMark, Lang, Workbench, hunks};
+use corvo_domain::{Change, Content, Doc, Finder, Hunk, HunkMark, Lang, Workbench, hunks};
 use corvo_lsp::Hub;
-use corvo_ui::{editor, notice, tab, viewer};
+use corvo_ui::find::{Count, FindBar};
+use corvo_ui::{drawer, editor, field, notice, tab, viewer};
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::input::{Replace, RopeExt as _, Search};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, Task, Window, div,
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, Styled as _, Subscription, Task, Window, div,
 };
 use lsp_types::{Diagnostic, Position};
 
@@ -49,6 +52,16 @@ struct Marked {
     _soon: Option<Task<()>>,
 }
 
+// The bar that finds in the active file: what is looked for and what replaces it, kept while
+// the bar is closed for the next time it opens.
+struct Find {
+    query: Entity<field::State>,
+    replace: Entity<field::State>,
+    case: bool,
+    replacing: bool,
+    _subs: Vec<Subscription>,
+}
+
 // The open files, each in a tab, over the home while shown; put away, they stay open for the
 // next time.
 pub struct Code {
@@ -63,6 +76,10 @@ pub struct Code {
     marked: HashMap<PathBuf, Marked>,
     // The line each file's cursor was last seen on.
     lines: HashMap<PathBuf, u32>,
+    find: Option<Find>,
+    finding: bool,
+    // How wide the drawer open over the right of the code is; the find bar keeps clear of it.
+    beside_panel: Option<f32>,
     _repos: Subscription,
 }
 
@@ -89,6 +106,9 @@ impl Code {
             subs: HashMap::new(),
             marked: HashMap::new(),
             lines: HashMap::new(),
+            find: None,
+            finding: false,
+            beside_panel: None,
             _repos: watch,
         }
     }
@@ -102,6 +122,7 @@ impl Code {
         }
         self.focus(window, cx);
         self.announce(cx);
+        self.seek(cx);
         cx.notify();
     }
 
@@ -353,6 +374,7 @@ impl Code {
         self.bench.update(cx, |bench, _| bench.focus(&path));
         self.focus(window, cx);
         self.announce(cx);
+        self.seek(cx);
         cx.notify();
     }
 
@@ -389,13 +411,19 @@ impl Code {
             return;
         };
         self.bench.update(cx, |bench, _| bench.close(&path));
-        self.hub.update(cx, |hub, _| hub.close(&path));
+        self.forget(&[path], window, cx);
+    }
+
+    // Lets go of the editors of tabs closed already, as with files gone to the trash; the tab
+    // in front takes the keys, or the code stays empty.
+    pub fn forget(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        if paths.is_empty() {
+            return;
+        }
+        for path in paths {
+            self.drop_view(path, cx);
+        }
         self.reap(cx);
-        self.views.remove(&path);
-        self.texts.remove(&path);
-        self.subs.remove(&path);
-        self.marked.remove(&path);
-        self.lines.remove(&path);
         if self.bench.read(cx).tabs().active().is_none() {
             cx.emit(Event::Emptied);
             cx.notify();
@@ -403,7 +431,314 @@ impl Code {
         }
         self.focus(window, cx);
         self.announce(cx);
+        self.seek(cx);
         cx.notify();
+    }
+
+    // Opens the bar that finds in the active file, with what is selected in it as the query
+    // when that is one line; again, it takes the keys back. With `replace`, its line to replace
+    // opens too, and takes them.
+    pub fn find(&mut self, replace: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.shown {
+            return;
+        }
+        let Some((_, state)) = self.active(cx) else {
+            return;
+        };
+        let find = self.find_bar(window, cx);
+        find.replacing |= replace;
+        let (query, with) = (find.query.clone(), find.replace.clone());
+        let selected = state.read(cx).selected_value();
+        if !selected.is_empty() && !selected.contains('\n') {
+            query.update(cx, |query, cx| query.set_value(selected, window, cx));
+        }
+        let field = if replace { with } else { query };
+        field.update(cx, |field, cx| {
+            field.focus(window, cx);
+            field.select_all(window, cx);
+        });
+        self.finding = true;
+        self.seek(cx);
+        cx.notify();
+    }
+
+    // The bar is open over the code in sight.
+    pub fn is_finding(&self) -> bool {
+        self.shown && self.finding
+    }
+
+    // Closes the bar: no file shows its matches any more, and the keys go back to the editor.
+    pub fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.finding = false;
+        for view in self.views.values() {
+            if let View::Text(state) = view {
+                state.update(cx, |state, cx| state.close_search(cx));
+            }
+        }
+        self.focus(window, cx);
+        cx.notify();
+    }
+
+    pub fn beside_panel(&mut self, width: Option<f32>, cx: &mut Context<Self>) {
+        if self.beside_panel != width {
+            self.beside_panel = width;
+            cx.notify();
+        }
+    }
+
+    // What is selected in the file in front, when it is on one line.
+    pub fn selected_line(&self, cx: &App) -> Option<String> {
+        let (_, state) = self.active_in(cx)?;
+        let selected = state.read(cx).selected_value();
+        (!selected.is_empty() && !selected.contains('\n')).then(|| selected.to_string())
+    }
+
+    // The text of each file open with changes not saved, as it is in its editor.
+    pub fn unsaved(&self, cx: &App) -> HashMap<PathBuf, String> {
+        let tabs = self.bench.read(cx).tabs();
+        self.views
+            .iter()
+            .filter(|(path, _)| tabs.get(path).is_some_and(Doc::is_dirty))
+            .filter_map(|(path, view)| match view {
+                View::Text(state) => Some((path.clone(), state.read(cx).value().to_string())),
+                View::Image | View::Binary(_) => None,
+            })
+            .collect()
+    }
+
+    // Replaces what the finder finds in a file open as text, in its editor, where it can be
+    // undone and is left to save; how many it replaced. None for a file not open so.
+    pub fn replace_in(
+        &mut self,
+        path: &Path,
+        finder: &Finder,
+        with: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let Some(View::Text(state)) = self.views.get(path) else {
+            return None;
+        };
+        let text = state.read(cx).value().to_string();
+        let (text, count) = finder.replace(&text, with);
+        if count > 0 {
+            state.update(cx, |state, cx| state.replace_all(text, window, cx));
+        }
+        Some(count)
+    }
+
+    // Opens a file with the bytes in `range` selected and in sight.
+    pub fn reveal_range(
+        &mut self,
+        path: &Path,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open(path, window, cx);
+        let Some(View::Text(state)) = self.views.get(path) else {
+            return;
+        };
+        state.update(cx, |state, cx| {
+            let end = state.text().len();
+            let range = range.start.min(end)..range.end.min(end);
+            let at = state.text().offset_to_position(range.start);
+            state.set_cursor_position(at, window, cx);
+            state.set_selected_range(range, cx);
+        });
+    }
+
+    fn find_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> &mut Find {
+        if self.find.is_none() {
+            let query = cx.new(|cx| field::state("Find", window, cx));
+            let replace = cx.new(|cx| field::state("Replace", window, cx));
+            let subs = vec![
+                cx.subscribe(&query, |this, _, event: &field::Event, cx| match event {
+                    field::Event::Change => this.seek(cx),
+                    field::Event::PressEnter { shift, .. } => this.step(*shift, cx),
+                    _ => {}
+                }),
+                cx.subscribe_in(&replace, window, |this, _, event, window, cx| {
+                    if let field::Event::PressEnter { secondary, .. } = event {
+                        this.replace(*secondary, window, cx);
+                    }
+                }),
+            ];
+            self.find = Some(Find {
+                query,
+                replace,
+                case: false,
+                replacing: false,
+                _subs: subs,
+            });
+        }
+        self.find.as_mut().expect("made above")
+    }
+
+    // Marks the matches of the query in the active file, from where it is scrolled to.
+    fn seek(&mut self, cx: &mut Context<Self>) {
+        let (Some(find), true) = (&self.find, self.finding) else {
+            return;
+        };
+        let Some((_, state)) = self.active(cx) else {
+            return;
+        };
+        let query = find.query.read(cx).value().to_string();
+        let insensitive = !find.case;
+        state.update(cx, |state, cx| {
+            state.set_search_query(query, insensitive, cx);
+        });
+        cx.notify();
+    }
+
+    // To the match after the current one, or before it.
+    fn step(&mut self, back: bool, cx: &mut Context<Self>) {
+        let Some((_, state)) = self.active(cx) else {
+            return;
+        };
+        state.update(cx, |state, cx| {
+            if back {
+                state.previous_search_match(cx);
+            } else {
+                state.next_search_match(cx);
+            }
+        });
+        cx.notify();
+    }
+
+    // Replaces the current match and goes to the next, or replaces them all.
+    fn replace(&mut self, all: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(find), Some((_, state))) = (&self.find, self.active(cx)) else {
+            return;
+        };
+        let with = find.replace.read(cx).value().to_string();
+        state.update(cx, |state, cx| {
+            if all {
+                state.replace_all_search_matches(&with, window, cx);
+            } else {
+                state.replace_current_search_match(&with, window, cx);
+            }
+        });
+        cx.notify();
+    }
+
+    fn toggle_case(&mut self, cx: &mut Context<Self>) {
+        if let Some(find) = &mut self.find {
+            find.case = !find.case;
+        }
+        self.seek(cx);
+    }
+
+    fn toggle_replace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(find) = &mut self.find else {
+            return;
+        };
+        find.replacing = !find.replacing;
+        let field = if find.replacing {
+            find.replace.clone()
+        } else {
+            find.query.clone()
+        };
+        field.update(cx, |field, cx| field.focus(window, cx));
+        cx.notify();
+    }
+
+    // What the bar tells of the matches in the active file.
+    fn count(&self, cx: &App) -> Count {
+        let Some((find, (_, state))) = self.find.as_ref().zip(self.active_in(cx)) else {
+            return Count::Idle;
+        };
+        if find.query.read(cx).value().is_empty() {
+            return Count::Idle;
+        }
+        let matcher = &state.read(cx).search_session().matcher;
+        match matcher.current() {
+            Some(ix) => Count::At(ix + 1, matcher.len()),
+            None => Count::None,
+        }
+    }
+
+    fn find_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let find = self.find.as_ref().filter(|_| self.finding)?;
+        let view = cx.entity().downgrade();
+        let on = |f: fn(&mut Self, &mut Window, &mut Context<Self>)| {
+            let view = view.clone();
+            move |window: &mut Window, cx: &mut App| {
+                view.update(cx, |this, cx| f(this, window, cx)).ok();
+            }
+        };
+        let mut bar = FindBar::new(&find.query, &find.replace)
+            .case(find.case)
+            .replacing(find.replacing)
+            .count(self.count(cx))
+            .on_case(on(|this, _, cx| this.toggle_case(cx)))
+            .on_toggle(on(Self::toggle_replace))
+            .on_prev(on(|this, _, cx| this.step(true, cx)))
+            .on_next(on(|this, _, cx| this.step(false, cx)))
+            .on_replace(on(|this, window, cx| this.replace(false, window, cx)))
+            .on_replace_all(on(|this, window, cx| this.replace(true, window, cx)))
+            .on_close(on(Self::close_find));
+        if let Some(width) = self.beside_panel {
+            bar = bar.clear_of(drawer::room_of(width));
+        }
+        Some(bar.into_any_element())
+    }
+
+    fn on_search(&mut self, _: &Search, window: &mut Window, cx: &mut Context<Self>) {
+        self.find(false, window, cx);
+    }
+
+    fn on_replace(&mut self, _: &Replace, window: &mut Window, cx: &mut Context<Self>) {
+        self.find(true, window, cx);
+    }
+
+    // Files that moved, each from its path before to the one after: their editors open again
+    // where they went, with what was typed in them, so the language and the language server
+    // follow the new name. The cursor of the file in front stays where it was.
+    pub fn moved(
+        &mut self,
+        moves: &[(PathBuf, PathBuf)],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if moves.is_empty() {
+            return;
+        }
+        for (old, new) in moves {
+            let Some(view) = self.drop_view(old, cx) else {
+                continue;
+            };
+            match view {
+                View::Text(state) => {
+                    let (text, at) = {
+                        let state = state.read(cx);
+                        (state.value().to_string(), state.cursor_position())
+                    };
+                    let state = self.edit(new, text, window, cx);
+                    state.update(cx, |state, cx| state.set_cursor_position(at, window, cx));
+                    self.views.insert(new.clone(), View::Text(state));
+                    self.rebase(new, cx);
+                }
+                other => {
+                    self.views.insert(new.clone(), other);
+                }
+            }
+        }
+        self.focus(window, cx);
+        self.announce(cx);
+        self.seek(cx);
+        cx.notify();
+    }
+
+    // Takes a file's editor away, with all that was kept of it, and tells the language server
+    // it closed.
+    fn drop_view(&mut self, path: &Path, cx: &mut Context<Self>) -> Option<View> {
+        self.hub.update(cx, |hub, _| hub.close(path));
+        self.texts.remove(path);
+        self.subs.remove(path);
+        self.marked.remove(path);
+        self.lines.remove(path);
+        self.views.remove(path)
     }
 
     fn reap(&self, cx: &mut Context<Self>) {
@@ -421,6 +756,11 @@ impl Code {
         }
     }
 
+    // The tab in front is a file open as text, in an editor to take the keys.
+    pub fn has_editor(&self, cx: &App) -> bool {
+        self.active_in(cx).is_some()
+    }
+
     // The keys go to the editor of the active tab, when it has one.
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((_, state)) = self.active(cx) {
@@ -429,6 +769,10 @@ impl Code {
     }
 
     fn active(&self, cx: &Context<Self>) -> Option<(PathBuf, Entity<editor::State>)> {
+        self.active_in(cx)
+    }
+
+    fn active_in(&self, cx: &App) -> Option<(PathBuf, Entity<editor::State>)> {
         let path = self.bench.read(cx).tabs().active()?.path().to_path_buf();
         match self.views.get(&path)? {
             View::Text(state) => Some((path, state.clone())),
@@ -473,6 +817,7 @@ impl Render for Code {
             .collect();
         let active = tabs.active_ix();
         let body = self.body(cx);
+        let find = self.find_view(cx);
 
         let pick = cx.entity().downgrade();
         let close = pick.clone();
@@ -481,6 +826,8 @@ impl Render for Code {
             .flex()
             .flex_col()
             .size_full()
+            .on_action(cx.listener(Self::on_search))
+            .on_action(cx.listener(Self::on_replace))
             .child(
                 tab::Bar::new("tabs", items)
                     .active(active)
@@ -491,7 +838,14 @@ impl Render for Code {
                         close.update(cx, |this, cx| this.close(ix, window, cx)).ok();
                     }),
             )
-            .child(div().flex_1().min_h_0().children(body))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .children(body)
+                    .children(find),
+            )
     }
 }
 

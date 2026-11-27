@@ -23,10 +23,12 @@ pub fn state(
     window: &mut Window,
     cx: &mut Context<State>,
 ) -> State {
+    // The search of the code is a bar of corvo's own over the editor, not the one it brings.
     let mut state = EditorState::new(window, cx)
         .language(name(lang))
         .line_number(true)
         .folding(true)
+        .searchable(false)
         .default_value(text);
     state.set_soft_wrap(false, window, cx);
     if let Some(source) = source {
