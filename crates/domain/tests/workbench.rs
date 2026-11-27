@@ -7,7 +7,8 @@ use std::rc::Rc;
 
 use corvo_domain::port::{Depth, Fs, Syntax};
 use corvo_domain::{
-    Arrangement, Content, Lang, Mark, Moved, Node, Place, Symbol, SymbolKind, Workbench,
+    Arrangement, Content, Kind, Lang, Mark, Moved, Node, Place, Query, Symbol, SymbolKind,
+    Workbench,
 };
 
 #[derive(Clone, Default)]
@@ -15,6 +16,46 @@ struct Memory {
     files: Rc<RefCell<HashMap<PathBuf, String>>>,
     dirs: Rc<RefCell<HashMap<PathBuf, Vec<Node>>>>,
     lists: Rc<RefCell<usize>>,
+    trashed: Rc<RefCell<Vec<PathBuf>>>,
+}
+
+impl Memory {
+    // Puts a node in its folder's list, unless something is there already.
+    fn place(&self, node: Node) -> io::Result<()> {
+        let dir = node.path().parent().unwrap().to_path_buf();
+        let mut dirs = self.dirs.borrow_mut();
+        let list = dirs.entry(dir).or_default();
+        if list.iter().any(|n| n.path() == node.path()) {
+            return Err(io::ErrorKind::AlreadyExists.into());
+        }
+        list.push(node);
+        Ok(())
+    }
+
+    // Takes a node out of its folder's list.
+    fn take(&self, path: &Path) -> io::Result<Node> {
+        let mut dirs = self.dirs.borrow_mut();
+        let list = dirs
+            .get_mut(path.parent().unwrap())
+            .ok_or(io::ErrorKind::NotFound)?;
+        let ix = list
+            .iter()
+            .position(|n| n.path() == path)
+            .ok_or(io::ErrorKind::NotFound)?;
+        Ok(list.remove(ix))
+    }
+}
+
+fn rekey<T>(map: &mut HashMap<PathBuf, T>, from: &Path, to: &Path) {
+    let keys: Vec<PathBuf> = map
+        .keys()
+        .filter(|k| k.starts_with(from))
+        .cloned()
+        .collect();
+    for key in keys {
+        let value = map.remove(&key).unwrap();
+        map.insert(to.join(key.strip_prefix(from).unwrap()), value);
+    }
 }
 
 impl Fs for Memory {
@@ -35,6 +76,47 @@ impl Fs for Memory {
         self.files
             .borrow_mut()
             .insert(path.to_path_buf(), text.to_owned());
+        Ok(())
+    }
+
+    fn create_file(&self, path: &Path) -> io::Result<()> {
+        self.place(Node::file(path))?;
+        self.files
+            .borrow_mut()
+            .insert(path.to_path_buf(), String::new());
+        Ok(())
+    }
+
+    fn create_dir(&self, path: &Path) -> io::Result<()> {
+        self.place(Node::dir(path))?;
+        self.dirs
+            .borrow_mut()
+            .insert(path.to_path_buf(), Vec::new());
+        Ok(())
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let node = self.take(from)?;
+        if let Err(err) = self.place(Node::new(to, node.kind())) {
+            self.place(node).unwrap();
+            return Err(err);
+        }
+        rekey(&mut self.files.borrow_mut(), from, to);
+        let mut dirs = self.dirs.borrow_mut();
+        rekey(&mut dirs, from, to);
+        for (dir, list) in dirs.iter_mut().filter(|(dir, _)| dir.starts_with(to)) {
+            for node in list.iter_mut() {
+                *node = Node::new(dir.join(node.name()), node.kind());
+            }
+        }
+        Ok(())
+    }
+
+    fn trash(&self, path: &Path) -> io::Result<()> {
+        self.take(path)?;
+        self.files.borrow_mut().retain(|p, _| !p.starts_with(path));
+        self.dirs.borrow_mut().retain(|p, _| !p.starts_with(path));
+        self.trashed.borrow_mut().push(path.to_path_buf());
         Ok(())
     }
 }
@@ -499,4 +581,181 @@ fn moved(path: &str, shown: bool) -> Moved {
         path: PathBuf::from(path),
         shown,
     }
+}
+
+fn names(bench: &Workbench, dir: &str) -> Vec<String> {
+    bench
+        .tree()
+        .unwrap()
+        .children(Path::new(dir))
+        .unwrap()
+        .iter()
+        .map(|node| node.name().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_new_file_shows_in_its_folder_opened_in_the_tree() {
+    let fs = project();
+    let mut bench = bench(fs.clone());
+
+    let path = bench
+        .create(Path::new("/p/src"), " mod.rs ", Kind::File)
+        .unwrap();
+
+    assert_eq!(path, Path::new("/p/src/mod.rs"));
+    assert_eq!(fs.files.borrow()[&path], "");
+    assert!(bench.tree().unwrap().is_open(Path::new("/p/src")));
+    assert_eq!(names(&bench, "/p/src"), ["lib.rs", "mod.rs"]);
+}
+
+#[test]
+fn a_new_folder_comes_before_the_files() {
+    let mut bench = bench(project());
+
+    bench.create(Path::new("/p"), "docs", Kind::Dir).unwrap();
+
+    assert_eq!(names(&bench, "/p"), ["docs", "src", "main.rs"]);
+}
+
+#[test]
+fn a_name_already_there_is_refused() {
+    let mut bench = bench(project());
+
+    let err = bench
+        .create(Path::new("/p"), "main.rs", Kind::File)
+        .unwrap_err();
+
+    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+}
+
+#[test]
+fn names_that_leave_the_folder_or_say_nothing_are_refused() {
+    let fs = project();
+    let mut bench = bench(fs.clone());
+
+    for name in ["", "   ", ".", "..", "a/b.rs", "/etc"] {
+        let err = bench.create(Path::new("/p"), name, Kind::File).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{name:?}");
+    }
+    assert_eq!(fs.files.borrow().len(), 1);
+}
+
+#[test]
+fn a_renamed_file_keeps_its_tab_and_what_was_typed_in_it() {
+    let mut bench = bench(project());
+    let main = Path::new("/p/main.rs");
+    bench.open(main).unwrap();
+    bench.touch(main);
+
+    let renamed = bench.rename(main, "start.rs").unwrap();
+
+    assert_eq!(renamed.path, Path::new("/p/start.rs"));
+    assert_eq!(
+        renamed.tabs,
+        [(main.to_path_buf(), PathBuf::from("/p/start.rs"))]
+    );
+    // Equal paths may still be written apart: no slash is left at the end.
+    assert_eq!(renamed.tabs[0].1.to_str(), Some("/p/start.rs"));
+    let doc = bench.tabs().active().unwrap();
+    assert_eq!(doc.name(), "start.rs");
+    assert!(doc.is_dirty());
+    assert_eq!(names(&bench, "/p"), ["src", "start.rs"]);
+}
+
+#[test]
+fn a_renamed_folder_takes_its_tabs_and_open_folders_along() {
+    let fs = project();
+    fs.write(Path::new("/p/src/lib.rs"), "").unwrap();
+    let mut bench = bench(fs);
+    bench.expand(Path::new("/p/src")).unwrap();
+    bench.open(Path::new("/p/src/lib.rs")).unwrap();
+
+    let renamed = bench.rename(Path::new("/p/src"), "core").unwrap();
+
+    assert_eq!(renamed.path, Path::new("/p/core"));
+    assert_eq!(
+        bench.tabs().active().unwrap().path(),
+        Path::new("/p/core/lib.rs")
+    );
+    let tree = bench.tree().unwrap();
+    assert!(tree.is_open(Path::new("/p/core")));
+    let shown = bench.tabs().active().unwrap().path().to_str();
+    assert_eq!(shown, Some("/p/core/lib.rs"));
+    assert!(!tree.is_loaded(Path::new("/p/src")));
+    let inside = tree.children(Path::new("/p/core")).unwrap();
+    assert_eq!(inside[0].path(), Path::new("/p/core/lib.rs"));
+}
+
+#[test]
+fn renaming_to_the_same_name_does_nothing() {
+    let mut bench = bench(project());
+
+    let renamed = bench.rename(Path::new("/p/main.rs"), "main.rs").unwrap();
+
+    assert_eq!(renamed.path, Path::new("/p/main.rs"));
+    assert!(renamed.tabs.is_empty());
+}
+
+#[test]
+fn a_rename_onto_another_file_is_refused() {
+    let fs = project();
+    fs.create_file(Path::new("/p/lib.rs")).unwrap();
+    let mut bench = bench(fs);
+
+    let err = bench.rename(Path::new("/p/main.rs"), "lib.rs").unwrap_err();
+
+    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+}
+
+#[test]
+fn a_trashed_folder_closes_the_tabs_inside_and_leaves_the_tree() {
+    let fs = project();
+    fs.write(Path::new("/p/src/lib.rs"), "").unwrap();
+    let mut bench = bench(fs.clone());
+    bench.expand(Path::new("/p/src")).unwrap();
+    bench.open(Path::new("/p/src/lib.rs")).unwrap();
+    bench.open(Path::new("/p/main.rs")).unwrap();
+
+    let closed = bench.trash(Path::new("/p/src")).unwrap();
+
+    assert_eq!(closed, [PathBuf::from("/p/src/lib.rs")]);
+    assert_eq!(bench.tabs().docs().len(), 1);
+    assert_eq!(names(&bench, "/p"), ["main.rs"]);
+    assert!(!bench.tree().unwrap().is_loaded(Path::new("/p/src")));
+    assert_eq!(*fs.trashed.borrow(), [PathBuf::from("/p/src")]);
+}
+
+#[test]
+fn a_project_folder_is_neither_renamed_nor_trashed() {
+    let fs = project();
+    let mut bench = bench(fs.clone());
+
+    let renamed = bench.rename(Path::new("/p"), "other").unwrap_err();
+    let trashed = bench.trash(Path::new("/p")).unwrap_err();
+
+    assert_eq!(renamed.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(trashed.kind(), io::ErrorKind::PermissionDenied);
+    assert!(fs.trashed.borrow().is_empty());
+}
+
+#[test]
+fn replace_writes_only_a_file_where_it_found_something() {
+    let fs = project();
+    let mut bench = bench(fs.clone());
+    let main = Path::new("/p/main.rs");
+    let finder = |text: &str| {
+        Query {
+            text: text.into(),
+            ..Query::default()
+        }
+        .finder()
+        .unwrap()
+        .unwrap()
+    };
+
+    assert_eq!(bench.replace(main, &finder("main"), "start").unwrap(), 1);
+    assert_eq!(bench.replace(main, &finder("nowhere"), "x").unwrap(), 0);
+
+    assert_eq!(fs.files.borrow()[main], "fn start() {}");
 }

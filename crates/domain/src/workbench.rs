@@ -4,9 +4,17 @@ use std::path::{Path, PathBuf};
 
 use crate::port::{Depth, Fs, Syntax};
 use crate::{
-    Arrangement, Atlas, Content, Finder, Lang, Mark, Mention, Moved, Node, Place, Symbol, Tabs,
-    Tree, excerpt,
+    Arrangement, Atlas, Content, Finder, Kind, Lang, Mark, Mention, Moved, Node, Place, Symbol,
+    Tabs, Tree, excerpt,
 };
+
+// A file or folder under its new name, and the tabs that followed it, each from its path before
+// to the one after.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Renamed {
+    pub path: PathBuf,
+    pub tabs: Vec<(PathBuf, PathBuf)>,
+}
 
 pub struct Workbench {
     fs: Box<dyn Fs>,
@@ -133,6 +141,62 @@ impl Workbench {
         self.fs.write(path, text)?;
         self.tabs.clean(path);
         Ok(())
+    }
+
+    // Makes an empty file, or a folder, named `name` in `dir`, and opens `dir` in the tree so it
+    // shows; where it is.
+    pub fn create(&mut self, dir: &Path, name: &str, kind: Kind) -> io::Result<PathBuf> {
+        let path = dir.join(checked(name)?);
+        match kind {
+            Kind::File => self.fs.create_file(&path)?,
+            Kind::Dir => self.fs.create_dir(&path)?,
+        }
+        self.uncover(&[moved(&path)]);
+        // It is made: a folder above it that can't be shown open is no reason to say otherwise.
+        self.expand(dir).ok();
+        Ok(path)
+    }
+
+    // Gives a file or folder another name in the same folder. The tabs of what it held follow
+    // it, and so do the folders open in the tree.
+    pub fn rename(&mut self, path: &Path, name: &str) -> io::Result<Renamed> {
+        self.refuse_root(path, "renamed")?;
+        let Some(dir) = path.parent() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "it has no folder to stay in",
+            ));
+        };
+        let to = dir.join(checked(name)?);
+        if to == path {
+            return Ok(Renamed {
+                path: to,
+                tabs: Vec::new(),
+            });
+        }
+        self.fs.rename(path, &to)?;
+        let tabs = self.tabs.moved(path, &to);
+        let open = self
+            .tree_mut()
+            .map(|tree| tree.moved(path, &to))
+            .unwrap_or_default();
+        self.uncover(&[moved(path), moved(&to)]);
+        for dir in open {
+            self.expand(&dir).ok();
+        }
+        Ok(Renamed { path: to, tabs })
+    }
+
+    // Sends a file or folder to the trash; the tabs of what it held close. The paths of those.
+    pub fn trash(&mut self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        self.refuse_root(path, "sent to the trash")?;
+        self.fs.trash(path)?;
+        for tree in self.trees.values_mut() {
+            tree.forget(path);
+        }
+        let closed = self.tabs.close_under(path);
+        self.uncover(&[moved(path)]);
+        Ok(closed)
     }
 
     // Replaces what the finder finds in a file on disk; how many it replaced. A file where it
@@ -452,6 +516,40 @@ impl Workbench {
     fn tree_mut(&mut self) -> Option<&mut Tree> {
         self.trees.get_mut(self.project.as_ref()?)
     }
+
+    // A project's own folder stays as it is: it is linked, not a file to work on.
+    fn refuse_root(&self, path: &Path, what: &str) -> io::Result<()> {
+        if self.trees.contains_key(path) || self.atlas.projects().iter().any(|p| p == path) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("a project's own folder can't be {what} here"),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn moved(path: &Path) -> Moved {
+    Moved {
+        path: path.to_path_buf(),
+        shown: false,
+    }
+}
+
+// A name for a file or folder, without the blanks around it; refused when it would land
+// elsewhere, or nowhere.
+fn checked(name: &str) -> io::Result<&str> {
+    let name = name.trim();
+    let fault = if name.is_empty() {
+        "a name can't be empty"
+    } else if name == "." || name == ".." {
+        "that is not a name"
+    } else if name.contains('/') || name.contains('\0') {
+        "a name can't hold a /"
+    } else {
+        return Ok(name);
+    };
+    Err(io::Error::new(io::ErrorKind::InvalidInput, fault))
 }
 
 fn outside(first: u32, last: u32) -> io::Error {

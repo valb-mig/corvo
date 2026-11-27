@@ -47,4 +47,24 @@ impl Tree {
     pub fn is_open(&self, dir: &Path) -> bool {
         self.open.contains(dir)
     }
+
+    // Drops what was read of a folder that went, and of the folders inside it.
+    pub fn forget(&mut self, path: &Path) {
+        self.nodes.retain(|dir, _| !dir.starts_with(path));
+        self.open.retain(|dir| !dir.starts_with(path));
+    }
+
+    // A folder moved: what of it was open is forgotten where it was, and the folders that were
+    // open come back where it went, in order from the outermost, to be read again there.
+    pub fn moved(&mut self, from: &Path, to: &Path) -> Vec<PathBuf> {
+        let mut open: Vec<PathBuf> = self
+            .open
+            .iter()
+            .filter_map(|dir| dir.strip_prefix(from).ok())
+            .map(|rest| crate::tabs::under(to, rest))
+            .collect();
+        open.sort();
+        self.forget(from);
+        open
+    }
 }
