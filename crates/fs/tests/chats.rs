@@ -137,3 +137,19 @@ fn a_message_kept_before_images_loads_with_none() {
     let message = chat.last_ask().unwrap();
     assert_eq!((message.text.as_str(), message.images.len()), ("oi", 0));
 }
+
+#[test]
+fn count_tells_how_many_chats_a_workspace_keeps() {
+    let dir = scratch("count");
+    let store = JsonChats::new(&dir);
+
+    assert_eq!(store.count(SPACE).unwrap(), 0);
+    store.save(SPACE, &chat()).unwrap();
+    store
+        .save(SPACE, &Chat::new(4, "claude", "/p", 200))
+        .unwrap();
+    fs::create_dir_all(dir.join(SPACE.to_string()).join("3")).unwrap();
+
+    assert_eq!(store.count(SPACE).unwrap(), 2);
+    fs::remove_dir_all(dir).unwrap();
+}

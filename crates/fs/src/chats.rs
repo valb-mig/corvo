@@ -281,6 +281,22 @@ impl JsonChats {
         Ok(Self::new(crate::store::config_dir()?.join("chats")))
     }
 
+    // How many chats a workspace keeps, by their files, none read.
+    pub fn count(&self, workspace: Uuid) -> io::Result<usize> {
+        let entries = match std::fs::read_dir(self.folder(workspace)) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(err) => return Err(err),
+        };
+        let mut count = 0;
+        for entry in entries {
+            if entry?.path().extension().is_some_and(|ext| ext == "json") {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
     // The chats of a removed workspace go with it.
     pub fn forget(&self, workspace: Uuid) -> io::Result<()> {
         gone(std::fs::remove_dir_all(self.folder(workspace)))
