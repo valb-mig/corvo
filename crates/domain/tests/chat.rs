@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use corvo_domain::port::ChatStore;
 use corvo_domain::{
-    Answer, Ask, Chat, Chats, Diff, End, Entry, Message, Pick, Status, Step, StepKind, Uuid, ago,
-    image_mime,
+    Answer, Ask, Chat, Chats, Diff, End, Entry, Message, Pick, Run, Status, Step, StepKind, Uuid,
+    ago, image_mime, tally,
 };
 
 fn chat() -> Chat {
@@ -345,4 +345,65 @@ fn archiving_or_deleting_the_picked_chat_moves_on() {
     chats.delete(old).unwrap();
     assert_eq!(chats.active_id(), None, "only an archived chat is left");
     assert_eq!(store.0.borrow().len(), 1);
+}
+
+fn read(id: &str, path: &str) -> Step {
+    let mut step = Step::new(id, StepKind::Read, format!("Read {path}"));
+    step.set_target(Some(path.to_owned()));
+    step
+}
+
+#[test]
+fn a_reply_reads_as_words_and_the_steps_between_them() {
+    let mut chat = chat();
+    chat.ask("perfila o palette", 100);
+    let reply = chat.reply_mut().unwrap();
+    reply.say("Vou medir.");
+    reply.step(Step::new("t1", StepKind::Run, "cargo build"));
+    reply.say("\n\n");
+    reply.step(read("t2", "/p/a.rs"));
+    reply.say("Achei.");
+    reply.step(Step::new("t3", StepKind::Run, "cargo test"));
+
+    let runs = chat.last_reply().unwrap().runs();
+    assert_eq!(runs.len(), 4, "blank words don't part two steps");
+    assert_eq!(runs[0], Run::Text(0, "Vou medir."));
+    match &runs[1] {
+        Run::Steps(at, steps) => {
+            assert_eq!(*at, 1);
+            let ids: Vec<&str> = steps.iter().map(|step| step.id()).collect();
+            assert_eq!(ids, ["t1", "t2"]);
+        }
+        other => panic!("expected steps, got {other:?}"),
+    }
+    assert_eq!(runs[2], Run::Text(4, "Achei."));
+    assert!(matches!(&runs[3], Run::Steps(5, steps) if steps.len() == 1));
+}
+
+#[test]
+fn steps_tally_up_by_kind_in_the_order_they_came() {
+    let steps = [
+        Step::new("t1", StepKind::Run, "cargo build"),
+        read("t2", "/p/a.rs"),
+        Step::new("t3", StepKind::Run, "cargo test"),
+        read("t4", "/p/a.rs"),
+        read("t5", "/p/b.rs"),
+        edit("t6", "/p/a.rs", "a", "b"),
+        edit("t7", "/p/a.rs", "b", "c"),
+        Step::new("t8", StepKind::Search, "grep palette"),
+    ];
+    let steps: Vec<&Step> = steps.iter().collect();
+    assert_eq!(
+        tally(&steps),
+        [
+            "Ran 2 commands",
+            "read 2 files",
+            "edited 1 file",
+            "searched once"
+        ]
+    );
+
+    let one = Step::new("t1", StepKind::Fetch, "Fetch https://zed.dev");
+    assert_eq!(tally(&[&one]), ["Fetched 1 page"]);
+    assert!(tally(&[]).is_empty());
 }

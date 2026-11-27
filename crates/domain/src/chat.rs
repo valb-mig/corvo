@@ -49,6 +49,14 @@ pub enum Part {
     Step(Step),
 }
 
+// A stretch of a reply, as it reads: some words, or the steps taken one after another between
+// them. Each comes with the place of its first part in the reply.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Run<'a> {
+    Text(usize, &'a str),
+    Steps(usize, Vec<&'a Step>),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum End {
     Done,
@@ -505,6 +513,23 @@ impl Reply {
         })
     }
 
+    // The reply in stretches: each text, and the steps between two texts kept together. Blank
+    // words between two steps don't part them.
+    pub fn runs(&self) -> Vec<Run<'_>> {
+        let mut runs = Vec::new();
+        for (ix, part) in self.parts.iter().enumerate() {
+            match part {
+                Part::Text(text) if text.trim().is_empty() => {}
+                Part::Text(text) => runs.push(Run::Text(ix, text)),
+                Part::Step(step) => match runs.last_mut() {
+                    Some(Run::Steps(_, steps)) => steps.push(step),
+                    _ => runs.push(Run::Steps(ix, vec![step])),
+                },
+            }
+        }
+        runs
+    }
+
     // The step that waits on the dev.
     pub fn asking(&self) -> Option<&Step> {
         self.steps().find(|step| step.ask.is_some())
@@ -654,6 +679,80 @@ fn common(old: &str, new: &str) -> usize {
         .take_while(|(a, b)| a == b)
         .count();
     head + tail
+}
+
+// What some steps did, a few words for each kind of step, in the order the kinds came first:
+// ["Ran 3 commands", "read 2 files"]. Files are counted once however many times they were
+// touched.
+pub fn tally(steps: &[&Step]) -> Vec<String> {
+    let mut kinds: Vec<StepKind> = Vec::new();
+    for step in steps {
+        if !kinds.contains(&step.kind) {
+            kinds.push(step.kind);
+        }
+    }
+    kinds
+        .into_iter()
+        .enumerate()
+        .map(|(ix, kind)| {
+            let of: Vec<&Step> = steps
+                .iter()
+                .copied()
+                .filter(|step| step.kind == kind)
+                .collect();
+            let n = match kind {
+                StepKind::Read | StepKind::Edit | StepKind::Delete | StepKind::Move => files(&of),
+                _ => of.len(),
+            };
+            let clause = match kind {
+                StepKind::Search if n == 1 => "searched once".to_owned(),
+                StepKind::Search => format!("searched {n} times"),
+                StepKind::Think if n == 1 => "thought".to_owned(),
+                StepKind::Think => format!("thought {n} times"),
+                _ => {
+                    let (verb, one, many) = match kind {
+                        StepKind::Run => ("ran", "command", "commands"),
+                        StepKind::Read => ("read", "file", "files"),
+                        StepKind::Edit => ("edited", "file", "files"),
+                        StepKind::Delete => ("deleted", "file", "files"),
+                        StepKind::Move => ("moved", "file", "files"),
+                        StepKind::Fetch => ("fetched", "page", "pages"),
+                        _ => ("used", "tool", "tools"),
+                    };
+                    format!("{verb} {n} {}", if n == 1 { one } else { many })
+                }
+            };
+            if ix > 0 {
+                return clause;
+            }
+            let mut chars = clause.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().chain(chars).collect())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+// The files some steps touched, each once; a step that names none counts as one.
+fn files(steps: &[&Step]) -> usize {
+    let mut files = BTreeSet::new();
+    let mut unnamed = 0;
+    for step in steps {
+        for diff in &step.diffs {
+            files.insert(diff.path.display().to_string());
+        }
+        if !step.diffs.is_empty() {
+            continue;
+        }
+        match &step.target {
+            Some(target) => {
+                files.insert(target.clone());
+            }
+            None => unnamed += 1,
+        }
+    }
+    files.len() + unnamed
 }
 
 fn title(text: &str) -> String {

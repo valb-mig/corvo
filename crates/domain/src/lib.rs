@@ -31,8 +31,8 @@ pub use agent::{AgentSpec, Choice, Options, Pick, agents};
 pub use arrangement::{Arrangement, Group, Mark};
 pub use atlas::{Atlas, Place, stack};
 pub use chat::{
-    Answer, Ask, Chat, Diff, End, Entry, Message, Part, Reply, Status, Step, StepKind, ago,
-    image_mime,
+    Answer, Ask, Chat, Diff, End, Entry, Message, Part, Reply, Run, Status, Step, StepKind, ago,
+    image_mime, tally,
 };
 pub use chats::Chats;
 pub use content::Content;
