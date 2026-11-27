@@ -10,7 +10,9 @@ use gpui_kit::component::diff::{
     Diff, DiffEvent, DiffGutterMarker, DiffLinePosition, DiffLineRange, DiffSide,
 };
 use gpui_kit::component::input::{Textarea, TextareaState};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, ElementExt as _, Sizable as _, h_flex, v_flex,
+};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, ElementId, Entity, InteractiveElement as _,
     IntoElement, KeyDownEvent, ParentElement as _, Render, StatefulInteractiveElement as _,
@@ -687,7 +689,11 @@ impl Changes {
             .child(div().flex_1());
         if self.lines.is_some() && !conflicted {
             let (a, b) = (view.clone(), view.clone());
-            head = head
+            // A press anywhere else clears the window's text selection, the lines picked in the
+            // patch with it, before the click comes: the buttons that act on them keep it.
+            let actions = h_flex()
+                .gap_2()
+                .keep_text_selection("git-line-actions")
                 .child(
                     Button::new("git-lines")
                         .ghost()
@@ -716,6 +722,7 @@ impl Changes {
                             }),
                     )
                 });
+            head = head.child(actions);
         } else if let Some(file) = changed.clone() {
             let (a, b) = (view.clone(), view.clone());
             let p = path.clone();
