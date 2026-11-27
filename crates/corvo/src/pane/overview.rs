@@ -8,7 +8,7 @@ use corvo_domain::{
 use corvo_fs::LocalFs;
 use corvo_ui::file_icon::{FileIcon, FolderIcon};
 use corvo_ui::git::tint;
-use corvo_ui::graph::{self, Branch, Camera, Card, Graph};
+use corvo_ui::graph::{self, Branch, Camera, Card, Graph, Submenu};
 use corvo_ui::{field, notice, path};
 use gpui_kit::assets::IconName as Glyph;
 use gpui_kit::component::Icon;
@@ -649,45 +649,48 @@ fn relative(atlas: &Atlas, path: &Path) -> Option<String> {
     (!rest.as_os_str().is_empty()).then(|| rest.display().to_string())
 }
 
-// What a right click on a folder offers before hiding it: its path, the folder in the file
-// manager, and a terminal in it.
+// What a right click on a folder offers before hiding it, in two menus: Copy, its path in full
+// or from its project; Open, the folder in the file manager or a terminal in it.
 fn folder_menu(card: Card, atlas: &Atlas, path: &Path, view: &WeakEntity<Overview>) -> Card {
     let (shown, inside) = (path.to_path_buf(), path.to_path_buf());
     let view = view.clone();
-    copies(card, atlas, path)
-        .action("Open in file manager", Glyph::FolderOpen, move |_, cx| {
+    let open = Submenu::new("Open", Glyph::FolderOpen)
+        .entry("In file manager", Glyph::FolderOpen, move |_, cx| {
             cx.open_with_system(&shown);
         })
-        .action("Open terminal here", Glyph::SquareTerminal, move |_, cx| {
+        .entry("Terminal here", Glyph::SquareTerminal, move |_, cx| {
             let inside = inside.clone();
             view.update(cx, |_, cx| cx.emit(Event::Terminal(inside)))
                 .ok();
-        })
-        .separator()
+        });
+    card.submenu(copies(atlas, path)).submenu(open).separator()
 }
 
-// What a right click on a file offers before hiding it: its path, and its folder in the file
-// manager with it picked there.
+// What a right click on a file offers before hiding it: Copy, as for a folder, and Open, its
+// folder in the file manager with it picked there.
 fn file_menu(card: Card, atlas: &Atlas, path: &Path) -> Card {
     let file = path.to_path_buf();
-    copies(card, atlas, path)
-        .action("Open containing folder", Glyph::FolderOpen, move |_, cx| {
+    let open = Submenu::new("Open", Glyph::FolderOpen).entry(
+        "Containing folder",
+        Glyph::FolderOpen,
+        move |_, cx| {
             cx.reveal_path(&file);
-        })
-        .separator()
+        },
+    );
+    card.submenu(copies(atlas, path)).submenu(open).separator()
 }
 
 // The path in full, and from the project down when it is inside one.
-fn copies(card: Card, atlas: &Atlas, path: &Path) -> Card {
+fn copies(atlas: &Atlas, path: &Path) -> Submenu {
     let full = path.display().to_string();
-    let card = card.action("Copy path", Glyph::Copy, move |window, cx| {
+    let copies = Submenu::new("Copy", Glyph::Copy).entry("Path", Glyph::Copy, move |window, cx| {
         copy(&full, window, cx);
     });
     match relative(atlas, path) {
-        Some(rest) => card.action("Copy relative path", Glyph::Copy, move |window, cx| {
+        Some(rest) => copies.entry("Relative path", Glyph::Copy, move |window, cx| {
             copy(&rest, window, cx);
         }),
-        None => card,
+        None => copies,
     }
 }
 
